@@ -674,15 +674,16 @@ select.in{appearance:none;-webkit-appearance:none;
   img.src = 'adria.png';
   function renderAdria(color){
     const isHolo = document.body.classList.contains('holo');
-    const key = (isHolo ? 'h' : 'c') + color + '|' + blinkF;
+    const key = (isHolo ? 'h' : 'c') + color + '|' + blinkF + '|' + Math.round(talk*10);
     if (!img.complete || !img.naturalWidth || key === drawnKey) return;
     drawnKey = key;
     const w = cv.width, h = cv.height;
     cx.globalCompositeOperation = 'source-over'; cx.filter = 'none'; cx.globalAlpha = 1;
     cx.clearRect(0, 0, w, h);
-    if (!isHolo){ cx.drawImage(img, 0, 0); drawLids(); return; }
+    if (!isHolo){ cx.drawImage(img, 0, 0); drawMouth('none'); drawLids(); return; }
     cx.filter = 'grayscale(1) brightness(1.2) contrast(1.05)';
     cx.drawImage(img, 0, 0); cx.filter = 'none';
+    drawMouth('grayscale(1) brightness(1.2) contrast(1.05)');
     drawLids();
     cx.globalCompositeOperation = 'color'; cx.fillStyle = color; cx.fillRect(0, 0, w, h);
     cx.globalCompositeOperation = 'destination-in'; cx.drawImage(img, 0, 0);
@@ -691,6 +692,46 @@ select.in{appearance:none;-webkit-appearance:none;
     cx.globalCompositeOperation = 'destination-in'; cx.globalAlpha = .9; cx.drawImage(img, 0, 0); cx.globalAlpha = 1;
     cx.globalCompositeOperation = 'source-over';
   }
+  // Lèvres : la mâchoire (lèvre du bas + menton) descend selon « talk », intérieur de bouche sombre + dents
+  // Repères sur adria.png 600 px : commissures (245,429) et (360,429), creux de la ligne des lèvres (302,444)
+  const M = {x1:245, x2:360, y:429, cy:459, bottom:510};
+  function mouthY(x){ const t = (x - M.x1) / (M.x2 - M.x1); return (1-t)*(1-t)*M.y + 2*(1-t)*t*M.cy + t*t*M.y; }
+  function drawMouth(filter){
+    const k = cv.width / 600, d = talk * 17;
+    if (d < .8) return;
+    const x1 = M.x1*k, x2 = M.x2*k, y = M.y*k, cyy = M.cy*k, bot = M.bottom*k, D = d*k;
+    // 1) mâchoire : bandes horizontales décalées vers le bas (décalage D à la lèvre, 0 en bas du menton)
+    cx.save();
+    cx.beginPath(); cx.moveTo(x1 - 8*k, y - 2*k); cx.quadraticCurveTo((x1+x2)/2, cyy - 1*k, x2 + 8*k, y - 2*k);
+    cx.lineTo(x2 + 14*k, y + 30*k); cx.quadraticCurveTo((x1+x2)/2, bot + 22*k, x1 - 14*k, y + 30*k); cx.closePath(); cx.clip();
+    cx.filter = filter;
+    // grille de déformation : décalage max au centre de la lèvre, nul sur les joues et en bas du menton
+    // (le canvas a la taille de l'image : coordonnées source = coordonnées canvas)
+    const top = (y - 4*k), H = bot - top, n = 12, L = x1 - 24*k, W = (x2 - x1) + 48*k, m = 10;
+    const prof = c => Math.pow(Math.sin(Math.PI * c / m), .7);
+    for (let j = 0; j < m; j++){
+      const sx = L + W*j/m, sw = W/m + 1, pc = (prof(j) + prof(j+1)) / 2;
+      for (let i = 0; i < n; i++){
+        const sy = top + H*i/n, sh = H/n + 1, o1 = D*pc*(1 - i/n), o2 = D*pc*(1 - (i+1)/n);
+        cx.drawImage(img, sx, sy, sw, sh, sx, sy + o1, sw, sh + (o2 - o1) + .5);
+      }
+    }
+    cx.filter = 'none';
+    cx.restore();
+    // 2) intérieur de la bouche entre la ligne d'origine et la lèvre abaissée
+    cx.save();
+    cx.beginPath();
+    cx.moveTo(x1 + 4*k, mouthY(M.x1 + 4)*k);
+    for (let x = M.x1 + 4; x <= M.x2 - 4; x += 4) cx.lineTo(x*k, mouthY(x)*k);
+    for (let x = M.x2 - 4; x >= M.x1 + 4; x -= 4){ const f = Math.sin(Math.PI * (x - M.x1) / (M.x2 - M.x1)); cx.lineTo(x*k, mouthY(x)*k + D * (.25 + .75*f)); }
+    cx.closePath();
+    const g = cx.createLinearGradient(0, y, 0, cyy + D); g.addColorStop(0, '#2a0a0c'); g.addColorStop(1, '#5a1a1e');
+    cx.fillStyle = g; cx.fill(); cx.clip();
+    if (d > 6){ cx.fillStyle = 'rgba(245,240,235,.88)';
+      cx.beginPath(); for (let x = M.x1 + 14; x <= M.x2 - 14; x += 4) cx.lineTo(x*k, mouthY(x)*k + D*.2); for (let x = M.x2 - 14; x >= M.x1 + 14; x -= 4) cx.lineTo(x*k, mouthY(x)*k - 2*k); cx.closePath(); cx.fill(); }
+    cx.restore();
+  }
+
   // Clignement : paupières peintes (couleur de peau + cils) sur les yeux de l'image (coordonnées pour adria.png 600 px)
   const EYES = [{x:230,y:315,rx:37,ry:20,top:'#9c5c45',bot:'#c28470'},{x:375,y:315,rx:37,ry:20,top:'#7f4a3a',bot:'#a26554'}];
   let blinkF = 0;
@@ -713,6 +754,7 @@ select.in{appearance:none;-webkit-appearance:none;
     });
   }
   window.adriaBlink = f => { blinkF = f; drawFace(); };
+  window.adriaTalk = t => { talk = t; drawFace(); };
   (function blinker(){
     setTimeout(() => {
       const seq = [.5, 1, 1, .5, 0]; let i = 0;
