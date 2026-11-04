@@ -10,15 +10,28 @@ android {
         applicationId 'fr.kerherve.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 3
-        versionName '1.2'
+        versionCode 5
+        versionName '1.5'
+    }
+
+    signingConfigs {
+        // Clé fixe fournie par les secrets GitHub (JARVIS_KEYSTORE_B64 / JARVIS_KEYSTORE_PASSWORD).
+        // Sans ces secrets, on retombe sur la clé debug de la machine de compilation.
+        jarvis {
+            def ks = System.getenv('JARVIS_KEYSTORE_PATH')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('JARVIS_KEYSTORE_PASSWORD')
+                keyAlias 'jarvis'
+                keyPassword System.getenv('JARVIS_KEYSTORE_PASSWORD')
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            // Signé avec la clé debug : installable directement (sideload), pas pour le Play Store.
-            signingConfig signingConfigs.debug
+            signingConfig System.getenv('JARVIS_KEYSTORE_PATH') ? signingConfigs.jarvis : signingConfigs.debug
         }
     }
 
@@ -26,4 +39,9 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    implementation 'androidx.car.app:app:1.4.0'
+    implementation 'androidx.core:core:1.13.1'
 }

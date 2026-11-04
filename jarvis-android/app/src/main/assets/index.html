@@ -96,6 +96,32 @@ svg{display:block}
   background:linear-gradient(135deg,#5fdcff,#25f4ee);box-shadow:0 0 16px rgba(37,244,238,.3)}
 #send:disabled{opacity:.4}
 
+/* ---------- Sélecteur Avatar / Chat ---------- */
+.seg{display:flex;margin:4px 14px 6px;padding:3px;border-radius:13px;background:var(--card)}
+.seg button{flex:1;height:32px;border:0;border-radius:10px;background:transparent;color:var(--dim);
+  font-size:10px;font-weight:900;letter-spacing:1.4px;text-transform:uppercase}
+.seg button.on{color:#04121a;background:linear-gradient(135deg,#5fdcff,#25f4ee);box-shadow:0 0 12px rgba(37,244,238,.3)}
+body.m-avatar #log{display:none} body.m-chat #avatarView{display:none}
+
+/* ---------- Avatar ---------- */
+#avatarView{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 16px;gap:10px}
+#face{width:min(68vw,300px);height:min(68vw,300px);animation:float 6s ease-in-out infinite;--ec:#25f4ee}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+#face .ring{fill:none;stroke:var(--ec);stroke-width:2;opacity:.55;transform-origin:150px 150px;transition:stroke .4s}
+#face .ring2{fill:none;stroke:var(--ec);stroke-width:1;opacity:.25;stroke-dasharray:4 10;transform-origin:150px 150px;animation:spin 22s linear infinite}
+body.listening #face .ring{animation:ring 1.3s infinite;stroke:#4ade80}
+body.thinking #face .ring2{animation:spin 1.8s linear infinite;opacity:.8;stroke:#b79cff}
+body.speaking #face .ring{animation:glow .5s ease-in-out infinite alternate}
+@keyframes glow{from{opacity:.35}to{opacity:.95}}
+#face .eye,#face .mouth{transition:all .25s ease}
+#face .feat{stroke:var(--ec);fill:none;stroke-linecap:round;transition:stroke .4s}
+#face .iris{fill:var(--ec);transition:fill .4s}
+#face .blush{fill:#fda4af;opacity:0;transition:opacity .4s}
+#sub{max-width:100%;max-height:30vh;overflow-y:auto;text-align:center;font-size:16px;line-height:1.45;color:rgba(255,255,255,.92);
+  padding:10px 14px;border-radius:15px;background:var(--card);min-height:44px}
+#sub .q{display:block;font-size:11px;font-weight:800;letter-spacing:.6px;color:var(--lab);margin-bottom:4px;text-transform:uppercase}
+#emo{font-size:9px;font-weight:900;letter-spacing:1.5px;color:var(--lab);text-transform:uppercase}
+
 /* ---------- Réglages (bottom sheet) ---------- */
 #sheetBg{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .25s}
 #sheet{position:fixed;left:0;right:0;bottom:0;max-height:92%;overflow-y:auto;border-radius:22px 22px 0 0;padding:10px 18px 22px;
@@ -139,7 +165,29 @@ select.in{appearance:none;-webkit-appearance:none;
   </div>
 </div>
 
-<div class="label">Conversation</div>
+<div class="seg" id="seg"><button data-m="avatar">Avatar</button><button data-m="chat">Chat</button></div>
+
+<section id="avatarView">
+  <svg id="face" viewBox="0 0 300 300">
+    <defs>
+      <radialGradient id="hg" cx="50%" cy="38%" r="65%"><stop offset="0" stop-color="#16314f"/><stop offset="1" stop-color="#060d18"/></radialGradient>
+      <filter id="gl" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <circle class="ring2" cx="150" cy="150" r="142"/>
+    <circle class="ring" cx="150" cy="150" r="132"/>
+    <circle cx="150" cy="150" r="118" fill="url(#hg)"/>
+    <g filter="url(#gl)">
+      <path class="feat" id="bL" stroke-width="5" d="M92 104 L130 104"/>
+      <path class="feat" id="bR" stroke-width="5" d="M170 104 L208 104"/>
+      <g id="eL" class="eye"><ellipse class="feat" stroke-width="4" cx="111" cy="136" rx="17" ry="17"/><circle class="iris" id="pL" cx="111" cy="136" r="7"/></g>
+      <g id="eR" class="eye"><ellipse class="feat" stroke-width="4" cx="189" cy="136" rx="17" ry="17"/><circle class="iris" id="pR" cx="189" cy="136" r="7"/></g>
+      <ellipse class="blush" cx="88" cy="172" rx="13" ry="6"/><ellipse class="blush" cx="212" cy="172" rx="13" ry="6"/>
+      <path class="feat mouth" id="mouth" stroke-width="5" d="M118 196 Q150 206 182 196"/>
+    </g>
+  </svg>
+  <div id="emo">neutre</div>
+  <div id="sub"><span class="q" id="subQ"></span><span id="subT">Bonjour. Touche l'orbe pour me parler.</span></div>
+</section>
 <main id="log"></main>
 
 <div id="quick"></div>
@@ -166,7 +214,11 @@ select.in{appearance:none;-webkit-appearance:none;
 
   <div class="fl">Adresse</div>
   <input class="in" id="cUrl" type="url" placeholder="http://192.168.1.53:8123" autocapitalize="off">
-  <div class="hint">En local : <b>http://</b> + IP + :8123. À l'extérieur : ton adresse Nabu Casa en https.</div>
+  <div class="hint">À la maison : <b>http://</b> + IP + :8123.</div>
+
+  <div class="fl">Adresse hors maison (voiture, 4G)</div>
+  <input class="in" id="cExt" type="url" placeholder="https://xxxx.ui.nabu.casa" autocapitalize="off">
+  <div class="hint">Ton adresse Nabu Casa. Utilisée automatiquement quand l'IP locale ne répond pas.</div>
 
   <div class="fl">Jeton d'accès longue durée</div>
   <input class="in" id="cTok" type="password" placeholder="eyJhbGciOi…" autocapitalize="off">
@@ -182,6 +234,8 @@ select.in{appearance:none;-webkit-appearance:none;
 
   <div class="tg" id="tTts"><span>Lire la réponse à voix haute</span><div class="sw"></div></div>
   <div class="tg" id="tAuto"><span>Envoyer dès la fin de la dictée</span><div class="sw"></div></div>
+  <div class="tg" id="tAlertIn"><span>Voiture : alertes caméras intérieures aussi</span><div class="sw"></div></div>
+  <div class="hint">La caméra de la cour est toujours surveillée quand Jarvis est ouvert dans Android Auto.</div>
 
   <div id="tres"></div>
   <div class="acts">
@@ -196,7 +250,7 @@ select.in{appearance:none;-webkit-appearance:none;
   const A = window.Android;
   const DEFAULT_AGENT = 'adria';
   const ADRIA = {id:'adria',name:'ADRIA (routeur maison)'};
-  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,who:'Mael',tts:true,auto:true},
+  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,who:'Mael',tts:true,auto:true,alertIn:false,mode:'avatar',urlExt:''},
                           JSON.parse(A.getConfig() || '{}'));
   let convId = null, busy = false, pending = null, agents = [];
 
@@ -250,19 +304,16 @@ select.in{appearance:none;-webkit-appearance:none;
     if (busy) return;
     busy = true; $('send').disabled = true; setState('reflechit');
     add(text,'me'); pending = thinking();
-    A.ask(cfg.url, cfg.token, cfg.agent||'', 'fr', convId||'', text, cfg.who||'Mael');
+    A.ask(convId||'', text); avatarAsk(text);
   }
   window.onHaReply = (ok, payload) => {
     busy = false; $('send').disabled = false; setState('repos');
     if (pending){ pending.remove(); pending = null; }
-    if (!ok){ add(payload,'err'); return; }
+    if (!ok){ add(payload,'err'); avatarReply(payload,'inquiet'); return; }
     let j; try { j = JSON.parse(payload); } catch(e){ add('Réponse illisible de HA.','err'); return; }
     if (j.conversation_id) convId = j.conversation_id;
-    const r = j.response || {};
-    let txt = r.speech && r.speech.plain && r.speech.plain.speech;
-    if (!txt && r.response_type === 'error') txt = 'Erreur : ' + ((r.data||{}).code || 'inconnue');
-    txt = txt || 'Aucune réponse.';
-    add(txt,'ai');
+    const txt = j.texte || 'Aucune réponse.';
+    add(txt,'ai'); avatarReply(txt, j.emotion);
     if (cfg.tts) A.speak(txt.replace(/[*_#`>]/g,''));
   };
 
@@ -296,7 +347,7 @@ select.in{appearance:none;-webkit-appearance:none;
   });
 
   // ---------- réglages ----------
-  const toggles = {tTts:'tts', tAuto:'auto'};
+  const toggles = {tTts:'tts', tAuto:'auto', tAlertIn:'alertIn'};
   let draft = {};
   function fillAgents(sel){
     const s = $('cAgent'); s.innerHTML = '';
@@ -307,7 +358,7 @@ select.in{appearance:none;-webkit-appearance:none;
   }
   function openSheet(){
     draft = Object.assign({},cfg);
-    $('cUrl').value = cfg.url; $('cTok').value = cfg.token; fillAgents(cfg.agent); $('cWho').value = cfg.who || 'Mael';
+    $('cUrl').value = cfg.url; $('cExt').value = cfg.urlExt||''; $('cTok').value = cfg.token; fillAgents(cfg.agent); $('cWho').value = cfg.who || 'Mael';
     for (const [id,k] of Object.entries(toggles)) $(id).classList.toggle('on', !!cfg[k]);
     $('tres').textContent = '';
     document.body.classList.add('open');
@@ -331,18 +382,77 @@ select.in{appearance:none;-webkit-appearance:none;
     }
   };
   $('cSave').onclick = () => {
-    cfg = Object.assign(draft, {url:normUrl($('cUrl').value), token:$('cTok').value.trim(), agent:$('cAgent').value, who:$('cWho').value});
+    cfg = Object.assign(draft, {url:normUrl($('cUrl').value), urlExt:normUrl($('cExt').value), token:$('cTok').value.trim(), agent:$('cAgent').value, who:$('cWho').value});
     A.saveConfig(JSON.stringify(cfg));
-    convId = null; refreshHost(); closeSheet();
+    convId = null; setMode(cfg.mode); refreshHost(); closeSheet();
     add('Réglages enregistrés','sys');
   };
+
+  // ---------- Mode Avatar / Chat ----------
+  function setMode(m){
+    cfg.mode = m;
+    document.body.classList.toggle('m-avatar', m==='avatar');
+    document.body.classList.toggle('m-chat', m!=='avatar');
+    document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.m===m));
+  }
+  document.querySelectorAll('#seg button').forEach(b => b.onclick = () => { setMode(b.dataset.m); A.saveConfig(JSON.stringify(cfg)); });
+
+  // ---------- Avatar : 15 émotions d'ADRIA (input_select.adria_emotion) ----------
+  // eye = ouverture, smile = courbure bouche (-1..1), open = bouche ouverte, brow = [angle gauche, hauteur], c = couleur
+  const EMO = {
+    neutre:{eye:1,smile:.25,brow:[0,0],c:'#25f4ee'},      heureux:{eye:.75,smile:.9,brow:[-4,-3],c:'#4ade80'},
+    rire:{eye:.3,smile:1,open:.55,brow:[-6,-5],c:'#facc15'}, excite:{eye:1.2,smile:.8,open:.3,brow:[-6,-8],c:'#f472b6'},
+    surpris:{eye:1.35,smile:0,open:.75,round:1,brow:[0,-12],c:'#5fdcff'}, triste:{eye:.75,smile:-.7,brow:[-14,-2],c:'#60a5fa'},
+    colere:{eye:.65,smile:-.5,brow:[16,4],c:'#f87171'},    inquiet:{eye:1,smile:-.35,brow:[-12,-4],c:'#fb923c'},
+    reflexif:{eye:.7,smile:0,brow:[-4,-6],look:-6,c:'#b79cff'}, concentre:{eye:.55,smile:0,brow:[8,3],c:'#38bdf8'},
+    doute:{eye:.85,smile:-.15,brow:[0,0],asym:1,c:'#a78bfa'}, malicieux:{eye:.55,smile:.6,brow:[8,0],asym:1,c:'#f472b6'},
+    fatigue:{eye:.28,smile:-.1,brow:[-3,3],c:'#94a3b8'},   gene:{eye:.8,smile:.15,brow:[-8,-2],blush:1,c:'#fda4af'},
+    tendre:{eye:.65,smile:.6,brow:[-5,-3],blush:1,c:'#f9a8d4'}
+  };
+  const face = $('face'); let emo = 'neutre', talk = 0, blink = false;
+  function drawFace(){
+    const e = EMO[emo] || EMO.neutre;
+    face.style.setProperty('--ec', e.c);
+    const ry = Math.max(1.5, 17 * e.eye * (blink ? .08 : 1));
+    face.querySelectorAll('.eye ellipse').forEach(el => el.setAttribute('ry', ry));
+    const pr = Math.min(7, ry*.55), ly = 136 + (e.look||0);
+    ['pL','pR'].forEach(id => { $(id).setAttribute('r', pr); $(id).setAttribute('cy', ly); });
+    const a = -e.brow[0], h = e.brow[1], hr = e.asym ? h-9 : h;
+    $('bL').setAttribute('d', `M92 ${104+h+a*.5} L130 ${104+h-a*.5}`);
+    $('bR').setAttribute('d', `M170 ${104+hr-(e.asym?0:a)*.5} L208 ${104+hr+(e.asym?0:a)*.5}`);
+    face.querySelectorAll('.blush').forEach(b => b.style.opacity = e.blush ? .55 : 0);
+    const open = Math.max(e.open||0, talk), cy = 196 + e.smile*-2, k = e.smile*22;
+    const skew = e.asym ? 6 : 0;
+    let d;
+    if (open > .05){
+      const w = e.round ? 18 : 32, top = cy - 2 + (e.smile>0 ? -2 : 2);
+      d = `M${150-w} ${cy} Q150 ${top+k*.4} ${150+w} ${cy-skew} Q150 ${cy + 8 + open*30 + Math.max(0,k*.5)} ${150-w} ${cy} Z`;
+    } else d = `M118 ${cy} Q150 ${cy+k} 182 ${cy-skew}`;
+    $('mouth').setAttribute('d', d);
+    $('mouth').style.fill = open > .05 ? 'rgba(4,18,26,.9)' : 'none';
+    $('emo').textContent = emo;
+  }
+  function setEmotion(x){ if (x && EMO[x]) { emo = x; drawFace(); } }
+  (function blinker(){ setTimeout(() => { blink = true; drawFace(); setTimeout(() => { blink = false; drawFace(); blinker(); }, 130); }, 2500 + Math.random()*3500); })();
+
+  // Lèvres synchronisées sur la voix du téléphone
+  let speaking = false, flap = null;
+  window.onTts = (type) => {
+    if (type === 'start'){ speaking = true; document.body.classList.add('speaking');
+      clearInterval(flap); flap = setInterval(() => { talk = speaking ? .15 + Math.random()*.55 : 0; drawFace(); }, 110); }
+    else if (type === 'word'){ talk = .7; drawFace(); }
+    else if (type === 'done'){ speaking = false; document.body.classList.remove('speaking'); clearInterval(flap); talk = 0; drawFace(); }
+  };
+  function avatarAsk(q){ $('subQ').textContent = q; $('subT').textContent = '…'; setEmotion('reflexif'); }
+  function avatarReply(t, e){ $('subT').textContent = t; setEmotion(e || 'neutre'); }
+  drawFace();
 
   // ---------- démarrage ----------
   // migration : ancienne valeur « Adria » invalide → agent par défaut
   if (!/^conversation\./.test(cfg.agent||'') && cfg.agent !== 'adria') { cfg.agent = DEFAULT_AGENT; A.saveConfig(JSON.stringify(cfg)); }
   if ((cfg.v||1) < 2) { cfg.agent = 'adria'; cfg.who = cfg.who || 'Mael'; cfg.v = 2; A.saveConfig(JSON.stringify(cfg)); }
   cfg.url = normUrl(cfg.url);
-  refreshHost(); setState('repos');
+  refreshHost(); setState('repos'); setMode(cfg.mode||'avatar');
   if (!cfg.token) openSheet();
   else add('Prêt — touche l\'orbe ou écris','sys');
 })();

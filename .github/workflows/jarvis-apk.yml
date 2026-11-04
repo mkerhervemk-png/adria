@@ -24,7 +24,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
+      - name: Clé de signature fixe (si les secrets existent)
+        env:
+          B64: ${{ secrets.JARVIS_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$B64" ]; then
+            echo "$B64" | base64 -d > "$RUNNER_TEMP/jarvis.keystore"
+            echo "JARVIS_KEYSTORE_PATH=$RUNNER_TEMP/jarvis.keystore" >> "$GITHUB_ENV"
+            echo "Signature : clé fixe Jarvis"
+          else
+            echo "::warning::Secrets JARVIS_KEYSTORE_* absents : signature debug (mise à jour = désinstaller d'abord)"
+          fi
       - name: Build APK
+        env:
+          JARVIS_KEYSTORE_PASSWORD: ${{ secrets.JARVIS_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon assembleRelease
       - name: Rename
         run: cp app/build/outputs/apk/release/app-release.apk Jarvis.apk
@@ -36,5 +49,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="jarvis-v1.2-${{ github.run_number }}"
+          TAG="jarvis-v1.5-${{ github.run_number }}"
           gh release create "$TAG" Jarvis.apk --target "${{ github.sha }}" --title "Jarvis $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease
