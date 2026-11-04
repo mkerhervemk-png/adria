@@ -111,7 +111,7 @@ public class MainActivity extends Activity {
                 JSONObject o = new JSONObject();
                 o.put("url", prefs.getString("url", "http://192.168.1.53:8123"));
                 o.put("token", prefs.getString("token", ""));
-                o.put("agent", prefs.getString("agent", ""));
+                o.put("agent", "adria");
                 o.put("tts", prefs.getBoolean("tts", true));
                 o.put("auto", prefs.getBoolean("auto", true));
                 return o.toString();
@@ -124,9 +124,27 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void ask(String url, String token, String agent, String lang, String convId, String text) {
+        public void ask(String url, String token, String agent, String lang, String convId, String text, String who) {
             io.execute(() -> {
                 try {
+                    if ("adria".equals(agent)) {
+                        // Vrai cerveau ADRIA : script.avatar_demander, canal assist (pas d'Echo, pas de notif)
+                        JSONObject d = new JSONObject();
+                        d.put("question", text);
+                        d.put("canal", "assist");
+                        d.put("locuteur", who);
+                        if (who.equals("Ryan") || who.equals("Iwan") || who.equals("Aelia")) d.put("enfant", true);
+                        JSONObject r = new JSONObject(http("POST",
+                                url + "/api/services/script/avatar_demander?return_response", token, d.toString()));
+                        JSONObject sr = r.optJSONObject("service_response");
+                        String texte = sr != null ? sr.optString("texte", "") : "";
+                        if (texte.isEmpty()) texte = "ADRIA n'a rien répondu.";
+                        JSONObject out = new JSONObject().put("response",
+                                new JSONObject().put("speech", new JSONObject().put("plain",
+                                        new JSONObject().put("speech", texte))));
+                        js("onHaReply(true," + q(out.toString()) + ")");
+                        return;
+                    }
                     JSONObject req = new JSONObject();
                     req.put("text", text);
                     req.put("language", lang);
@@ -201,7 +219,7 @@ public class MainActivity extends Activity {
         HttpURLConnection c = (HttpURLConnection) new URL(target).openConnection();
         c.setRequestMethod(method);
         c.setConnectTimeout(8000);
-        c.setReadTimeout(60000);
+        c.setReadTimeout(120000); // ADRIA peut mettre jusqu'à ~60 s
         c.setRequestProperty("Authorization", "Bearer " + token);
         c.setRequestProperty("Content-Type", "application/json");
         if (body != null) {

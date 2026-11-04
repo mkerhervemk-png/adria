@@ -173,7 +173,12 @@ select.in{appearance:none;-webkit-appearance:none;
 
   <div class="fl">Agent de conversation</div>
   <select class="in" id="cAgent"></select>
-  <div class="hint" id="agHint">« Tester » charge la liste des agents de ton HA.</div>
+  <div class="hint" id="agHint">ADRIA = même cerveau que les Echo. « Tester » ajoute les autres agents de ton HA.</div>
+
+  <div class="fl">Qui parle</div>
+  <select class="in" id="cWho">
+    <option>Mael</option><option>Vanessa</option><option>Ryan</option><option>Iwan</option><option>Aelia</option>
+  </select>
 
   <div class="tg" id="tTts"><span>Lire la réponse à voix haute</span><div class="sw"></div></div>
   <div class="tg" id="tAuto"><span>Envoyer dès la fin de la dictée</span><div class="sw"></div></div>
@@ -189,8 +194,9 @@ select.in{appearance:none;-webkit-appearance:none;
 (() => {
   const $ = id => document.getElementById(id);
   const A = window.Android;
-  const DEFAULT_AGENT = 'conversation.claude_conversation';
-  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,tts:true,auto:true},
+  const DEFAULT_AGENT = 'adria';
+  const ADRIA = {id:'adria',name:'ADRIA (routeur maison)'};
+  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,who:'Mael',tts:true,auto:true},
                           JSON.parse(A.getConfig() || '{}'));
   let convId = null, busy = false, pending = null, agents = [];
 
@@ -219,8 +225,8 @@ select.in{appearance:none;-webkit-appearance:none;
   }
   function refreshHost(){
     const h = cfg.url ? cfg.url.replace(/^https?:\/\//,'') : 'non configuré';
-    const a = (agents.find(x=>x.id===cfg.agent)||{}).name || (cfg.agent||'').replace('conversation.','');
-    $('host').textContent = '· ' + h + (a ? ' · ' + a : '');
+    const a = cfg.agent==='adria' ? 'ADRIA' : ((agents.find(x=>x.id===cfg.agent)||{}).name || (cfg.agent||'').replace('conversation.',''));
+    $('host').textContent = '· ' + h + (a ? ' · ' + a : '') + ' · ' + (cfg.who||'Mael');
   }
   function add(text, cls){
     const d = document.createElement('div');
@@ -244,7 +250,7 @@ select.in{appearance:none;-webkit-appearance:none;
     if (busy) return;
     busy = true; $('send').disabled = true; setState('reflechit');
     add(text,'me'); pending = thinking();
-    A.ask(cfg.url, cfg.token, cfg.agent||'', 'fr', convId||'', text);
+    A.ask(cfg.url, cfg.token, cfg.agent||'', 'fr', convId||'', text, cfg.who||'Mael');
   }
   window.onHaReply = (ok, payload) => {
     busy = false; $('send').disabled = false; setState('repos');
@@ -294,14 +300,14 @@ select.in{appearance:none;-webkit-appearance:none;
   let draft = {};
   function fillAgents(sel){
     const s = $('cAgent'); s.innerHTML = '';
-    const list = agents.length ? agents : [{id:DEFAULT_AGENT,name:'Claude conversation'}];
+    const list = [ADRIA].concat(agents);
     if (sel && !list.find(a=>a.id===sel)) list.unshift({id:sel,name:sel});
     list.forEach(a => { const o=document.createElement('option'); o.value=a.id; o.textContent=a.name+' ('+a.id.replace('conversation.','')+')'; s.appendChild(o); });
     s.value = sel || DEFAULT_AGENT;
   }
   function openSheet(){
     draft = Object.assign({},cfg);
-    $('cUrl').value = cfg.url; $('cTok').value = cfg.token; fillAgents(cfg.agent);
+    $('cUrl').value = cfg.url; $('cTok').value = cfg.token; fillAgents(cfg.agent); $('cWho').value = cfg.who || 'Mael';
     for (const [id,k] of Object.entries(toggles)) $(id).classList.toggle('on', !!cfg[k]);
     $('tres').textContent = '';
     document.body.classList.add('open');
@@ -325,7 +331,7 @@ select.in{appearance:none;-webkit-appearance:none;
     }
   };
   $('cSave').onclick = () => {
-    cfg = Object.assign(draft, {url:normUrl($('cUrl').value), token:$('cTok').value.trim(), agent:$('cAgent').value});
+    cfg = Object.assign(draft, {url:normUrl($('cUrl').value), token:$('cTok').value.trim(), agent:$('cAgent').value, who:$('cWho').value});
     A.saveConfig(JSON.stringify(cfg));
     convId = null; refreshHost(); closeSheet();
     add('Réglages enregistrés','sys');
@@ -333,7 +339,8 @@ select.in{appearance:none;-webkit-appearance:none;
 
   // ---------- démarrage ----------
   // migration : ancienne valeur « Adria » invalide → agent par défaut
-  if (!/^conversation\./.test(cfg.agent||'')) { cfg.agent = DEFAULT_AGENT; A.saveConfig(JSON.stringify(cfg)); }
+  if (!/^conversation\./.test(cfg.agent||'') && cfg.agent !== 'adria') { cfg.agent = DEFAULT_AGENT; A.saveConfig(JSON.stringify(cfg)); }
+  if ((cfg.v||1) < 2) { cfg.agent = 'adria'; cfg.who = cfg.who || 'Mael'; cfg.v = 2; A.saveConfig(JSON.stringify(cfg)); }
   cfg.url = normUrl(cfg.url);
   refreshHost(); setState('repos');
   if (!cfg.token) openSheet();

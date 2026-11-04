@@ -36,5 +36,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="jarvis-v1.1-${{ github.run_number }}"
+          TAG="jarvis-v1.2-${{ github.run_number }}"
           gh release create "$TAG" Jarvis.apk --target "${{ github.sha }}" --title "Jarvis $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease
