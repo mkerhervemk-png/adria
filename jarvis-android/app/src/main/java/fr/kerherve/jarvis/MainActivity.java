@@ -116,6 +116,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void saveConfig(String json) {
             HaClient.prefs(MainActivity.this).edit().putString("cfg_json", json).apply();
+            MsgBridge.send(MainActivity.this, "config", null);
         }
 
         @JavascriptInterface

@@ -11,7 +11,7 @@ import androidx.car.app.model.Row;
 import androidx.car.app.model.Template;
 
 import fr.kerherve.jarvis.HaClient;
-import fr.kerherve.jarvis.Notifs;
+import fr.kerherve.jarvis.MsgBridge;
 
 /** Écran principal dans la voiture : parler à ADRIA, questions rapides, dernière image de la cour. */
 public class HomeScreen extends Screen {
@@ -32,8 +32,8 @@ public class HomeScreen extends Screen {
                 .setTitle("🎙 Parler à ADRIA")
                 .addText("Réponds au message d'ADRIA avec le micro")
                 .setOnClickListener(() -> {
-                    Notifs.adriaSays(getCarContext(), "Je t'écoute. Que veux-tu ?");
-                    CarToast.makeText(getCarContext(), "Réponds au message d'ADRIA", CarToast.LENGTH_LONG).show();
+                    boolean ok = MsgBridge.send(getCarContext(), "listen", "Je t'écoute. Que veux-tu ?");
+                    CarToast.makeText(getCarContext(), ok ? "Réponds au message d'Adria" : "Installe l'appli « Adria Messages »", CarToast.LENGTH_LONG).show();
                 }).build());
 
         for (String q : QUICK)

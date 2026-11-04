@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Appli Adria Messages : conversation vocale avec ADRIA dans Android Auto (messagerie). -->
 <automotiveApp>
-    <uses name="template" />
     <uses name="notification" />
 </automotiveApp>

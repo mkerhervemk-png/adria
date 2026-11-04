@@ -6,6 +6,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 
 import fr.kerherve.jarvis.HaClient;
+import fr.kerherve.jarvis.MsgBridge;
 import fr.kerherve.jarvis.Notifs;
 
 import org.json.JSONObject;
@@ -82,7 +83,7 @@ public final class CourWatcher {
                 String titre = w[2] + " — " + (detail.contains("—") ? detail.substring(0, detail.indexOf('—')).trim() : "Événement");
                 String desc = detail.contains("—") ? detail.substring(detail.indexOf('—') + 1).trim() : detail;
                 titre = titre.replace("PERSONNE_CONFIRMEE", "personne confirmée").replace('_', ' ');
-                Notifs.alert(ctx, titre + ". " + desc, img);
+                if (!MsgBridge.send(ctx, "alert", titre + ". " + desc)) Notifs.alert(ctx, titre + ". " + desc, img);
                 listener.onAlert(titre, desc, w[1], img);
             } catch (Exception ignored) { /* HA injoignable : on réessaie au prochain passage */ }
         }

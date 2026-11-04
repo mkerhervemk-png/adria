@@ -14,7 +14,7 @@ import androidx.car.app.model.Template;
 import org.json.JSONObject;
 
 import fr.kerherve.jarvis.HaClient;
-import fr.kerherve.jarvis.Notifs;
+import fr.kerherve.jarvis.MsgBridge;
 import fr.kerherve.jarvis.Voice;
 
 /** Question rapide → réponse d'ADRIA affichée et lue sur les haut-parleurs de la voiture. */
@@ -50,8 +50,8 @@ public class AnswerScreen extends Screen {
 
         Action follow = new Action.Builder().setTitle("Répondre à la voix")
                 .setOnClickListener(() -> {
-                    Notifs.adriaSays(getCarContext(), answer);
-                    CarToast.makeText(getCarContext(), "Réponds au message d'ADRIA", CarToast.LENGTH_LONG).show();
+                    boolean ok = MsgBridge.send(getCarContext(), "say", answer);
+                    CarToast.makeText(getCarContext(), ok ? "Réponds au message d'Adria" : "Installe l'appli « Adria Messages »", CarToast.LENGTH_LONG).show();
                 }).build();
         Action again = new Action.Builder().setTitle("Relire")
                 .setOnClickListener(() -> Voice.speak(answer)).build();
