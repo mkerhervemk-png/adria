@@ -40,14 +40,14 @@ jobs:
           JARVIS_KEYSTORE_PASSWORD: ${{ secrets.JARVIS_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon assembleRelease
       - name: Rename
-        run: cp app/build/outputs/apk/release/app-release.apk Jarvis.apk
+        run: cp app/build/outputs/apk/release/app-release.apk Adria.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Jarvis-apk
-          path: jarvis-android/Jarvis.apk
+          path: jarvis-android/Adria.apk
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="jarvis-v1.5-${{ github.run_number }}"
-          gh release create "$TAG" Jarvis.apk --target "${{ github.sha }}" --title "Jarvis $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease
+          TAG="adria-v1.6-${{ github.run_number }}"
+          gh release create "$TAG" Adria.apk --target "${{ github.sha }}" --title "Adria $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease

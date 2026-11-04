@@ -51,7 +51,7 @@ public class HomeScreen extends Screen {
 
         String sub = HaClient.from(getCarContext()).configured() ? "" : " — configure l'appli sur le téléphone";
         return new ListTemplate.Builder()
-                .setTitle("Jarvis · ADRIA" + sub)
+                .setTitle("Adria" + sub)
                 .setHeaderAction(Action.APP_ICON)
                 .setSingleList(list.build())
                 .build();
