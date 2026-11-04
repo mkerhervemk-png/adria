@@ -105,8 +105,8 @@ svg{display:block}
 body.m-avatar #log{display:none} body.m-chat #avatarView{display:none}
 
 /* ---------- Avatar ---------- */
-#avatarView{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 16px;gap:10px}
-#holo{position:relative;height:min(40vh,400px);aspect-ratio:3/4;max-width:92vw;--ec:#25f4ee;--glow:10px}
+#avatarView{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 16px;gap:10px}
+#holo{position:relative;height:min(33vh,380px);aspect-ratio:3/4;max-width:92vw;--ec:#25f4ee;--glow:10px}
 #holo .rings{position:absolute;left:-6%;right:-6%;top:-4%;width:112%;opacity:.9;pointer-events:none}
 #holo .rings circle{fill:none;transform-origin:150px 150px;transition:stroke .5s}
 #holo .r0{stroke:var(--ec);stroke-opacity:.18}
@@ -128,7 +128,7 @@ body.listening #holo{--ec:#4ade80}
 body.listening #holo .r0{animation:ring 1.3s infinite}
 body.thinking #holo .r1{animation-duration:2s} body.thinking #holo .r2{animation-duration:3s;opacity:.9}
 body.speaking #holo{--glow:18px}
-#sub{max-width:100%;max-height:26vh;overflow-y:auto;text-align:center;font-size:16px;line-height:1.45;color:rgba(255,255,255,.92);
+#sub{max-width:100%;max-height:16vh;overflow-y:auto;text-align:center;font-size:16px;line-height:1.45;color:rgba(255,255,255,.92);
   padding:10px 14px;border-radius:15px;background:var(--card);min-height:44px}
 #sub .q{display:block;font-size:11px;font-weight:800;letter-spacing:.6px;color:var(--lab);margin-bottom:4px;text-transform:uppercase}
 #emo{font-size:9px;font-weight:900;letter-spacing:1.5px;color:var(--lab);text-transform:uppercase}
@@ -145,6 +145,7 @@ body.car #quick{grid-column:2;grid-row:3}
 body.car .dock{grid-column:2;grid-row:4;margin:0 12px 10px}
 body.car #orb{width:96px;height:96px}
 
+.top,.seg,#quick,.dock,#tabs{flex-shrink:0}
 /* ---------- Onglets ---------- */
 #tabs{display:flex;gap:4px;margin:0 10px;padding:6px;border-radius:18px;background:rgba(5,12,22,.72);
   margin-bottom:max(8px,env(safe-area-inset-bottom))}
@@ -183,8 +184,8 @@ body.car #tabs{display:none}
 .person .nm{font-size:14px;font-weight:800}.person .lo{font-size:11px;color:var(--dim);margin-top:2px}
 .ev{display:flex;gap:10px;padding:8px 2px;border-top:1px solid rgba(255,255,255,.06);font-size:13px}
 .ev:first-child{border-top:0}.ev b{min-width:44px;color:var(--sky);font-weight:800}
-.bar{height:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:8px}
-.bar i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#2dd4bf,#4ade80)}
+.gauge{height:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:8px}
+.gauge i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#2dd4bf,#4ade80)}
 #confirm{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);z-index:20}
 #confirm.on{display:flex}
 #confirm .box{width:min(86vw,360px);border-radius:20px;background:linear-gradient(180deg,#0f1d31,#070e1b);padding:18px}
@@ -599,7 +600,7 @@ select.in{appearance:none;-webkit-appearance:none;
       $('insterC').innerHTML = `<div class="grid2">${kpi('Batterie', bat, '%', '#4ade80')}${kpi('Autonomie', Math.round(parseFloat(st('sensor.inster_ev_range'))||0), 'km')}
         ${kpi('Prise', on('binary_sensor.inster_ev_battery_plug') ? 'Branchée' : 'Débranchée')}${kpi('Charge', on('switch.inster_ev_charging') || on('binary_sensor.inster_ev_battery_charge') ? 'En cours' : 'Arrêtée')}
         ${kpi('Clim', st('climate.inster_climate_control') === 'off' ? 'Arrêtée' : 'En marche')}${kpi('Portes', on('binary_sensor.inster_locked') ? 'OUVERTES' : 'Verrouillées', '', on('binary_sensor.inster_locked') ? '#f87171' : '#fff')}</div>
-        <div class="bar"><i style="width:${bat}%"></i></div>`;
+        <div class="gauge"><i style="width:${bat}%"></i></div>`;
     }
   }
   function refreshPage(){
