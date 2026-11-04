@@ -92,6 +92,54 @@ public final class HaClient {
         return out;
     }
 
+    /** Action déterministe d'ADRIA (0 IA) : script.adria_action_voix, avec les droits de la personne. */
+    public JSONObject action(String commande) throws Exception {
+        JSONObject d = new JSONObject().put("commande", commande).put("perso", who.toLowerCase());
+        JSONObject r = new JSONObject(http("POST", "/api/services/script/adria_action_voix?return_response", d.toString()));
+        JSONObject sr = r.optJSONObject("service_response");
+        return sr != null ? sr : new JSONObject().put("ok", false).put("raison", "pas de réponse");
+    }
+
+    /** Lampe de la liste blanche d'ADRIA (script.adria_lumiere), ex : "on light.salon". */
+    public JSONObject lumiere(String commande) throws Exception {
+        JSONObject d = new JSONObject().put("commande", commande);
+        JSONObject r = new JSONObject(http("POST", "/api/services/script/adria_lumiere?return_response", d.toString()));
+        JSONObject sr = r.optJSONObject("service_response");
+        return sr != null ? sr : new JSONObject().put("ok", false).put("raison", "pas de réponse");
+    }
+
+    /** États de plusieurs entités : {entity_id: {state, attributes}}. */
+    public JSONObject states(org.json.JSONArray ids) {
+        JSONObject out = new JSONObject();
+        for (int i = 0; i < ids.length(); i++) {
+            String id = ids.optString(i);
+            try {
+                JSONObject st = new JSONObject(http("GET", "/api/states/" + id, null));
+                JSONObject o = new JSONObject().put("s", st.optString("state"));
+                JSONObject at = st.optJSONObject("attributes");
+                if (at != null) o.put("a", at);
+                out.put(id, o);
+            } catch (Exception e) {
+                try { out.put(id, new JSONObject().put("s", "unavailable")); } catch (Exception ignored) { }
+            }
+        }
+        return out;
+    }
+
+    /** Événements d'agenda entre deux dates ISO. */
+    public String calendar(String entityId, String start, String end) throws Exception {
+        return http("GET", "/api/calendars/" + entityId + "?start=" + java.net.URLEncoder.encode(start, "UTF-8")
+                + "&end=" + java.net.URLEncoder.encode(end, "UTF-8"), null);
+    }
+
+    /** Image caméra en data URL JPEG (pour la WebView). */
+    public String cameraDataUrl(String entityId) throws Exception {
+        Bitmap b = cameraImage(entityId);
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        b.compress(Bitmap.CompressFormat.JPEG, 70, bo);
+        return "data:image/jpeg;base64," + android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
+    }
+
     public String state(String entityId) throws Exception {
         return new JSONObject(http("GET", "/api/states/" + entityId, null)).optString("state", "");
     }

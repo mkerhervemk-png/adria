@@ -159,6 +159,61 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void action(String reqId, String commande) {
+            io.execute(() -> {
+                HaClient ha = HaClient.from(MainActivity.this);
+                try { js("onAction(" + q(reqId) + "," + q(ha.action(commande).toString()) + ")"); }
+                catch (Exception e) { js("onAction(" + q(reqId) + "," + q("{\"ok\":false,\"raison\":" + JSONObject.quote(HaClient.explain(e, ha.url)) + "}") + ")"); }
+            });
+        }
+
+        @JavascriptInterface
+        public void lumiere(String reqId, String commande) {
+            io.execute(() -> {
+                HaClient ha = HaClient.from(MainActivity.this);
+                try { js("onAction(" + q(reqId) + "," + q(ha.lumiere(commande).toString()) + ")"); }
+                catch (Exception e) { js("onAction(" + q(reqId) + "," + q("{\"ok\":false,\"raison\":" + JSONObject.quote(HaClient.explain(e, ha.url)) + "}") + ")"); }
+            });
+        }
+
+        @JavascriptInterface
+        public void states(String reqId, String idsJson) {
+            io.execute(() -> {
+                try {
+                    JSONObject r = HaClient.from(MainActivity.this).states(new JSONArray(idsJson));
+                    js("onStates(" + q(reqId) + "," + q(r.toString()) + ")");
+                } catch (Exception e) { js("onStates(" + q(reqId) + ",'{}')"); }
+            });
+        }
+
+        @JavascriptInterface
+        public void camera(String entityId) {
+            io.execute(() -> {
+                try { js("onCamera(" + q(entityId) + "," + q(HaClient.from(MainActivity.this).cameraDataUrl(entityId)) + ")"); }
+                catch (Exception e) { js("onCamera(" + q(entityId) + ",'')"); }
+            });
+        }
+
+        @JavascriptInterface
+        public void calendar(String entityId, String start, String end) {
+            io.execute(() -> {
+                try { js("onCalendar(" + q(entityId) + "," + q(HaClient.from(MainActivity.this).calendar(entityId, start, end)) + ")"); }
+                catch (Exception e) { js("onCalendar(" + q(entityId) + ",'[]')"); }
+            });
+        }
+
+        /** Afficher ou retirer l'avatar : active/désactive aussi l'écran « Adria · Hologramme » de la voiture. */
+        @JavascriptInterface
+        public void setAvatarEnabled(boolean on) {
+            try {
+                getPackageManager().setComponentEnabledSetting(
+                        new android.content.ComponentName(MainActivity.this, ParkedActivity.class),
+                        on ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED : PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                        PackageManager.DONT_KILL_APP);
+            } catch (Exception ignored) { }
+        }
+
+        @JavascriptInterface
         public void speak(String text) { Voice.speak(text); }
 
         @JavascriptInterface

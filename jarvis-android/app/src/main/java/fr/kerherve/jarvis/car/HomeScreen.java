@@ -19,8 +19,7 @@ public class HomeScreen extends Screen {
     private static final String[] QUICK = {
             "Qui est à la maison ?",
             "Couleur Tempo demain ?",
-            "Batterie de l'Inster ?",
-            "Préchauffe l'Inster"};
+            "Batterie de l'Inster ?"};
 
     public HomeScreen(@NonNull CarContext c) { super(c); }
 
@@ -41,6 +40,12 @@ public class HomeScreen extends Screen {
             list.addItem(new Row.Builder().setTitle(q)
                     .setOnClickListener(() -> getScreenManager().push(new AnswerScreen(getCarContext(), q)))
                     .build());
+
+        list.addItem(new Row.Builder()
+                .setTitle("⚡ Raccourcis")
+                .addText("Surveillance, alarme, je pars, je rentre…")
+                .setOnClickListener(() -> getScreenManager().push(new ShortcutsScreen(getCarContext())))
+                .build());
 
         list.addItem(new Row.Builder()
                 .setTitle("📷 Caméra de la cour")

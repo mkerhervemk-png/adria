@@ -106,7 +106,7 @@ body.m-avatar #log{display:none} body.m-chat #avatarView{display:none}
 
 /* ---------- Avatar ---------- */
 #avatarView{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 16px;gap:10px}
-#holo{position:relative;height:min(50vh,430px);aspect-ratio:3/4;max-width:92vw;--ec:#25f4ee;--glow:10px}
+#holo{position:relative;height:min(40vh,400px);aspect-ratio:3/4;max-width:92vw;--ec:#25f4ee;--glow:10px}
 #holo .rings{position:absolute;left:-6%;right:-6%;top:-4%;width:112%;opacity:.9;pointer-events:none}
 #holo .rings circle{fill:none;transform-origin:150px 150px;transition:stroke .5s}
 #holo .r0{stroke:var(--ec);stroke-opacity:.18}
@@ -124,6 +124,7 @@ body:not(.holo) #holo .fig canvas{filter:drop-shadow(0 0 calc(var(--glow) * .6) 
 #holo .socle ellipse.s1{fill:none;stroke:#b79cff;stroke-opacity:.6;stroke-dasharray:3 5}
 #wave{fill:none;stroke:#04121a;stroke-width:2.5;opacity:.55;transition:d .1s}
 body.listening #holo{--ec:#4ade80}
+.pa{}
 body.listening #holo .r0{animation:ring 1.3s infinite}
 body.thinking #holo .r1{animation-duration:2s} body.thinking #holo .r2{animation-duration:3s;opacity:.9}
 body.speaking #holo{--glow:18px}
@@ -143,6 +144,52 @@ body.car #carRight #sub{max-height:none;font-size:20px;flex:0 1 auto;overflow-y:
 body.car #quick{grid-column:2;grid-row:3}
 body.car .dock{grid-column:2;grid-row:4;margin:0 12px 10px}
 body.car #orb{width:96px;height:96px}
+
+/* ---------- Onglets ---------- */
+#tabs{display:flex;gap:4px;margin:0 10px;padding:6px;border-radius:18px;background:rgba(5,12,22,.72);
+  margin-bottom:max(8px,env(safe-area-inset-bottom))}
+#tabs button{flex:1;border:0;background:transparent;color:var(--dim);border-radius:13px;padding:6px 2px 5px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase}
+#tabs button svg{width:22px;height:22px}
+#tabs button.on{color:#04121a;background:linear-gradient(135deg,#5fdcff,#25f4ee);box-shadow:0 0 12px rgba(37,244,238,.3)}
+.page{display:none;flex:1;min-height:0;overflow-y:auto;padding:4px 14px 12px}
+body[data-page=secu] #pg-secu,body[data-page=maison] #pg-maison,body[data-page=famille] #pg-famille,body[data-page=energie] #pg-energie{display:block}
+body:not([data-page=adria]) .pa{display:none!important}
+body.noavatar .seg,body.noavatar #avatarView{display:none!important}
+body.car #tabs{display:none}
+.h2{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;margin:14px 2px 8px}
+.h2:first-child{margin-top:4px}
+.card{border-radius:18px;background:var(--card);padding:12px 14px;margin-bottom:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kpi{border-radius:13px;background:rgba(255,255,255,.035);padding:9px 12px}
+.kpi .l{font-size:9px;font-weight:800;letter-spacing:.6px;color:var(--dim);text-transform:uppercase}
+.kpi .v{font-size:17px;font-weight:900;margin-top:2px}
+.kpi .v small{font-size:10px;font-weight:700;color:var(--dim);margin-left:3px}
+.act{border:0;border-radius:15px;height:54px;display:flex;align-items:center;gap:10px;padding:0 14px;font-size:13px;font-weight:800;color:rgba(255,255,255,.92);width:100%;text-align:left;
+  background:linear-gradient(100deg,rgba(var(--rgb),.14),rgba(5,12,22,.58) 38%,rgba(5,12,22,.54))}
+.act .ic{font-size:20px;width:26px;text-align:center}
+.act:active{filter:brightness(1.25)}
+.tile{border:0;border-radius:15px;padding:12px;text-align:left;color:#fff;background:var(--card);display:flex;flex-direction:column;gap:6px;min-height:76px}
+.tile .n{font-size:13px;font-weight:800}.tile .st{font-size:10px;font-weight:900;letter-spacing:.6px;color:var(--dim);text-transform:uppercase}
+.tile.on{background:linear-gradient(135deg,rgba(250,204,21,.22),rgba(5,12,22,.6) 70%);box-shadow:inset 0 0 0 1px rgba(250,204,21,.35)}
+.tile.on .st{color:#facc15}
+.cam{border-radius:15px;overflow:hidden;background:#000;position:relative;aspect-ratio:16/10}
+.cam img{width:100%;height:100%;object-fit:cover;display:block}
+.cam .lb{position:absolute;left:8px;top:8px;font-size:10px;font-weight:900;letter-spacing:.8px;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:8px}
+.cam .vd{position:absolute;left:0;right:0;bottom:0;font-size:11px;padding:16px 9px 7px;background:linear-gradient(transparent,rgba(0,0,0,.8));color:#e5f6ff}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:900;letter-spacing:.6px;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.06)}
+.pill i{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 6px currentColor}
+.person{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:15px;background:var(--card);margin-bottom:8px}
+.person .av{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-weight:900;font-size:17px;color:#04121a}
+.person .nm{font-size:14px;font-weight:800}.person .lo{font-size:11px;color:var(--dim);margin-top:2px}
+.ev{display:flex;gap:10px;padding:8px 2px;border-top:1px solid rgba(255,255,255,.06);font-size:13px}
+.ev:first-child{border-top:0}.ev b{min-width:44px;color:var(--sky);font-weight:800}
+.bar{height:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#2dd4bf,#4ade80)}
+#confirm{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);z-index:20}
+#confirm.on{display:flex}
+#confirm .box{width:min(86vw,360px);border-radius:20px;background:linear-gradient(180deg,#0f1d31,#070e1b);padding:18px}
+#confirm .t{font-size:16px;font-weight:800;margin-bottom:6px}#confirm .m{font-size:13px;color:var(--dim);margin-bottom:14px}
+#toast{position:fixed;left:50%;bottom:120px;transform:translateX(-50%);background:rgba(15,29,49,.96);padding:10px 16px;border-radius:14px;font-size:13px;font-weight:700;display:none;z-index:21;max-width:86vw;text-align:center}
 
 /* ---------- Réglages (bottom sheet) ---------- */
 #sheetBg{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .25s}
@@ -187,9 +234,9 @@ select.in{appearance:none;-webkit-appearance:none;
   </div>
 </div>
 
-<div class="seg" id="seg"><button data-m="avatar">Avatar</button><button data-m="chat">Chat</button></div>
+<div class="seg pa" id="seg"><button data-m="avatar">Avatar</button><button data-m="chat">Chat</button></div>
 
-<section id="avatarView">
+<section id="avatarView" class="pa">
   <div id="holo">
     <svg class="rings" viewBox="0 0 300 300">
       <circle class="r0" cx="150" cy="150" r="142"/>
@@ -208,11 +255,11 @@ select.in{appearance:none;-webkit-appearance:none;
   <div id="emo">neutre</div>
   <div id="sub"><span class="q" id="subQ"></span><span id="subT">Bonjour, je suis Adria. Touche l'orbe pour me parler. (Touche-moi pour passer en couleurs.)</span></div>
 </section>
-<main id="log"></main>
+<main id="log" class="pa"></main>
 
-<div id="quick"></div>
+<div id="quick" class="pa"></div>
 
-<div class="dock" id="dock">
+<div class="dock pa" id="dock">
   <div class="orbrow">
     <div class="wave" id="wl"><b></b><b></b><b></b><b></b><b></b></div>
     <button id="orb" aria-label="Parler">
@@ -226,6 +273,70 @@ select.in{appearance:none;-webkit-appearance:none;
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 20.5V14l9-2-9-2V3.5L22 12z"/></svg></button>
   </form>
 </div>
+
+<section class="page" id="pg-secu">
+  <div class="h2">🛡️ Sécurité</div>
+  <div class="card" id="secStat"></div>
+  <div class="grid2">
+    <button class="act" style="--rgb:56,189,248" data-act="surveillance seule" data-c="Lancer la surveillance (sans alarme sonore) ?"><span class="ic">👁️</span>Lancer la surveillance</button>
+    <button class="act" style="--rgb:248,113,113" data-act="surveillance alarme" data-c="Lancer la surveillance AVEC l'alarme sonore ?"><span class="ic">🛡️</span>Lancer l'alarme</button>
+  </div>
+  <div style="margin-top:10px"><button class="act" style="--rgb:250,204,21" data-act="alarme stop" data-c="Arrêter l'alarme ? La surveillance reste armée."><span class="ic">🛑</span>Arrêter l'alarme (la surveillance reste armée)</button></div>
+  <div class="h2">📷 Caméras</div>
+  <div class="grid2" id="cams"></div>
+</section>
+
+<section class="page" id="pg-maison">
+  <div class="h2">💡 Lumières</div>
+  <div class="grid2" id="lights"></div>
+  <div class="h2">🤖 Aspirateur Javier 2</div>
+  <div class="card"><div class="grid2" id="aspiK"></div></div>
+  <div class="grid2">
+    <button class="act" style="--rgb:74,222,128" data-act="aspi lancer" data-c="Lancer l'aspirateur ?"><span class="ic">▶️</span>Lancer</button>
+    <button class="act" style="--rgb:248,113,113" data-act="aspi stop"><span class="ic">⏹️</span>Stop</button>
+    <button class="act" style="--rgb:56,189,248" data-act="aspi base"><span class="ic">🏠</span>Retour base</button>
+    <button class="act" style="--rgb:183,156,255" data-act="aspi fort"><span class="ic">💨</span>Puissance forte</button>
+  </div>
+  <div class="h2">📺 Salon & 🌙 Nuit</div>
+  <div class="grid2">
+    <button class="act" style="--rgb:56,189,248" data-act="tv on"><span class="ic">📺</span>Allumer la TV</button>
+    <button class="act" style="--rgb:148,163,184" data-act="tv off"><span class="ic">⏻</span>Éteindre la TV</button>
+    <button class="act" style="--rgb:183,156,255" data-act="nuit on" data-c="Activer le mode nuit ?"><span class="ic">🌙</span>Mode nuit</button>
+    <button class="act" style="--rgb:250,204,21" data-act="nuit off"><span class="ic">☀️</span>Fin du mode nuit</button>
+  </div>
+</section>
+
+<section class="page" id="pg-famille">
+  <div class="h2">👨‍👩‍👧‍👦 Où est chacun</div>
+  <div id="people"></div>
+  <div class="h2">📅 Aujourd'hui</div>
+  <div class="card" id="agenda"><div class="ev">Chargement…</div></div>
+</section>
+
+<section class="page" id="pg-energie">
+  <div class="h2">⚡ Tempo</div>
+  <div class="card"><div class="grid2" id="tempoK"></div></div>
+  <div class="h2">🚗 Hyundai Inster</div>
+  <div class="card" id="insterC"></div>
+  <div class="grid2">
+    <button class="act" style="--rgb:74,222,128" data-act="charge on" data-c="Lancer la charge de l'Inster ?"><span class="ic">🔌</span>Lancer la charge</button>
+    <button class="act" style="--rgb:248,113,113" data-act="charge off"><span class="ic">⏹️</span>Arrêter la charge</button>
+    <button class="act" style="--rgb:251,146,60" data-act="clim on" data-c="Préchauffer l'Inster (22 °C) ?"><span class="ic">🔥</span>Préchauffer</button>
+    <button class="act" style="--rgb:148,163,184" data-act="clim off"><span class="ic">❄️</span>Arrêter la clim</button>
+  </div>
+</section>
+
+<nav id="tabs">
+  <button data-p="adria"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a5 5 0 0 1 5 5v1a5 5 0 0 1-10 0V7a5 5 0 0 1 5-5zm-7 18c0-3 3.1-4.5 7-4.5s7 1.5 7 4.5V22H5z"/></svg>Adria</button>
+  <button data-p="secu"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5z"/></svg>Sécurité</button>
+  <button data-p="maison"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l9 8h-3v9h-5v-6h-2v6H6v-9H3z"/></svg>Maison</button>
+  <button data-p="famille"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 19c0-3 2.7-5 6-5s6 2 6 5v1H2zm12.5 1v-1c0-1.7-.6-3.1-1.6-4.2.9-.5 2-.8 3.1-.8 3.3 0 6 2 6 5v1z"/></svg>Famille</button>
+  <button data-p="energie"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Énergie</button>
+</nav>
+
+<div id="confirm"><div class="box"><div class="t" id="cfT">Confirmer ?</div><div class="m" id="cfM"></div>
+  <div class="acts"><button class="btn" id="cfNo" style="--rgb:148,163,184">Annuler</button><button class="btn pri" id="cfYes">Confirmer</button></div></div></div>
+<div id="toast"></div>
 
 <div id="sheetBg"></div>
 <div id="sheet">
@@ -254,6 +365,7 @@ select.in{appearance:none;-webkit-appearance:none;
 
   <div class="tg" id="tTts"><span>Lire la réponse à voix haute</span><div class="sw"></div></div>
   <div class="tg" id="tAuto"><span>Envoyer dès la fin de la dictée</span><div class="sw"></div></div>
+  <div class="tg" id="tAvatar"><span>Afficher l'avatar d'Adria</span><div class="sw"></div></div>
   <div class="tg" id="tHolo"><span>Avatar en hologramme (sinon en couleurs)</span><div class="sw"></div></div>
   <div class="tg" id="tAlertIn"><span>Voiture : alertes caméras intérieures aussi</span><div class="sw"></div></div>
   <div class="hint">La caméra de la cour est toujours surveillée quand Jarvis est ouvert dans Android Auto.</div>
@@ -271,17 +383,21 @@ select.in{appearance:none;-webkit-appearance:none;
   const A = window.Android;
   const DEFAULT_AGENT = 'adria';
   const ADRIA = {id:'adria',name:'ADRIA (routeur maison)'};
-  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,who:'Mael',tts:true,auto:true,alertIn:false,mode:'avatar',urlExt:'',holo:true},
+  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,who:'Mael',tts:true,auto:true,alertIn:false,mode:'avatar',urlExt:'',holo:true,avatar:true},
                           JSON.parse(A.getConfig() || '{}'));
   let convId = null, busy = false, pending = null, agents = [];
 
+  // [libellé, couleur, action directe (0 IA) ou null = question à ADRIA, confirmation]
   const QUICK = [
+    ['👁️ Lancer la surveillance','56,189,248','surveillance seule','Lancer la surveillance (sans alarme sonore) ?'],
+    ['🛡️ Lancer l\'alarme','248,113,113','surveillance alarme','Lancer la surveillance AVEC l\'alarme sonore ?'],
+    ['🚗 Je pars','183,156,255',null,null,'Je pars'],
+    ['🏠 Je rentre','74,222,128',null,null,'Je rentre'],
+    ['🛑 Arrête l\'alarme','250,204,21','alarme stop','Arrêter l\'alarme ? La surveillance reste armée.'],
     ['Qui est à la maison ?','74,222,128'],
     ['Quelle météo aujourd\'hui ?','95,220,255'],
-    ['Couleur Tempo demain ?','250,204,21'],
     ['Batterie de l\'Inster ?','45,212,191'],
-    ['Où est Ryan ?','183,156,255'],
-    ['Éteins toutes les lumières','248,113,113'],
+    ['Mon prochain quart ?','251,146,60'],
   ];
 
   // ---------- utilitaires ----------
@@ -295,7 +411,7 @@ select.in{appearance:none;-webkit-appearance:none;
     const [t,c,cls] = map[kind];
     $('state').firstChild.nodeValue = t + ' ';
     $('state').style.color = c;
-    $('dock').className = 'dock ' + cls;
+    $('dock').className = 'dock pa ' + cls;
     document.body.className = document.body.className.replace(/\b(listening|thinking)\b/g,'').trim() + (cls?' '+cls:'');
   }
   function refreshHost(){
@@ -361,14 +477,14 @@ select.in{appearance:none;-webkit-appearance:none;
   $('ask').onsubmit = e => { e.preventDefault(); const t=$('q').value; $('q').value=''; ask(t); };
   $('bNew').onclick = () => { convId = null; $('log').innerHTML=''; add('Nouvelle conversation','sys'); };
 
-  QUICK.forEach(([t,rgb]) => {
+  QUICK.forEach(([t,rgb,act,conf,phrase]) => {
     const b = document.createElement('button'); b.className='chip'; b.style.setProperty('--rgb',rgb);
     b.innerHTML = '<i></i>'; b.appendChild(document.createTextNode(t));
-    b.onclick = () => ask(t); $('quick').appendChild(b);
+    b.onclick = () => act ? doAction(act, conf, t) : ask(phrase || t); $('quick').appendChild(b);
   });
 
   // ---------- réglages ----------
-  const toggles = {tTts:'tts', tAuto:'auto', tAlertIn:'alertIn', tHolo:'holo'};
+  const toggles = {tTts:'tts', tAuto:'auto', tAlertIn:'alertIn', tHolo:'holo', tAvatar:'avatar'};
   let draft = {};
   function fillAgents(sel){
     const s = $('cAgent'); s.innerHTML = '';
@@ -380,7 +496,7 @@ select.in{appearance:none;-webkit-appearance:none;
   function openSheet(){
     draft = Object.assign({},cfg);
     $('cUrl').value = cfg.url; $('cExt').value = cfg.urlExt||''; $('cTok').value = cfg.token; fillAgents(cfg.agent); $('cWho').value = cfg.who || 'Mael';
-    for (const [id,k] of Object.entries(toggles)) $(id).classList.toggle('on', k==='holo' ? cfg.holo!==false : !!cfg[k]);
+    for (const [id,k] of Object.entries(toggles)) $(id).classList.toggle('on', (k==='holo'||k==='avatar') ? cfg[k]!==false : !!cfg[k]);
     $('tres').textContent = '';
     document.body.classList.add('open');
   }
@@ -405,9 +521,128 @@ select.in{appearance:none;-webkit-appearance:none;
   $('cSave').onclick = () => {
     cfg = Object.assign(draft, {url:normUrl($('cUrl').value), urlExt:normUrl($('cExt').value), token:$('cTok').value.trim(), agent:$('cAgent').value, who:$('cWho').value});
     A.saveConfig(JSON.stringify(cfg));
-    convId = null; setMode(cfg.mode); setHolo(cfg.holo); refreshHost(); closeSheet();
+    convId = null; setAvatar(cfg.avatar); setMode(cfg.mode); setHolo(cfg.holo); refreshHost(); closeSheet();
     add('Réglages enregistrés','sys');
   };
+
+  // ---------- Actions directes (0 IA, avec les droits de « Qui parle ») ----------
+  const pendingAct = {}; let actN = 0;
+  function toast(t){ const e = $('toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = 'none', 3500); }
+  function confirmBox(msg){ return new Promise(res => {
+    $('cfM').textContent = msg; $('confirm').classList.add('on');
+    $('cfYes').onclick = () => { $('confirm').classList.remove('on'); res(true); };
+    $('cfNo').onclick = () => { $('confirm').classList.remove('on'); res(false); };
+  }); }
+  async function doAction(cmd, conf, label){
+    if (!cfg.token){ openSheet(); return; }
+    if (conf && !(await confirmBox(conf))) return;
+    const id = 'a' + (++actN); pendingAct[id] = label || cmd;
+    toast('⏳ ' + (label || cmd));
+    if (cmd.startsWith('light ')) A.lumiere(id, cmd.slice(6)); else A.action(id, cmd);
+  }
+  const RAISONS = {'surveillance armee sans alarme':'Surveillance armée (sans alarme sonore)','surveillance armee avec alarme':'Surveillance + alarme armées',
+    'aucune alarme en cours':'Aucune alarme en cours','alarme arretee, surveillance toujours armee':'Alarme arrêtée — la surveillance reste armée'};
+  window.onAction = (id, json) => {
+    let r = {}; try { r = JSON.parse(json); } catch(e){}
+    const lbl = pendingAct[id] || ''; delete pendingAct[id];
+    const txt = RAISONS[r.raison] || r.raison || '';
+    toast((r.ok ? '✅ ' : '⚠️ ') + (r.ok ? (txt || lbl) : (txt || 'refusé')));
+    if (r.ok && document.body.dataset.page === 'adria') add('✓ ' + (txt || lbl), 'sys');
+    setTimeout(refreshPage, 1500);
+  };
+  document.querySelectorAll('[data-act]').forEach(b => b.onclick = () => doAction(b.dataset.act, b.dataset.c, b.textContent.trim()));
+
+  // ---------- Pages (lecture directe des états HA, 0 IA) ----------
+  const LIGHTS = [['light.salon','Salon'],['light.piece_de_vie','Salon + entrée'],['light.entree','Entrée'],['light.exterieur','Extérieur'],
+    ['light.abris_voiture','Abri voiture'],['light.h618a','Chambre Iwan'],['light.chambre_iwan','Bureau Ryan'],['light.chambre_aelia_guirlande_aelia_prise_1','Guirlande Aelia']];
+  const CAMS = [['camera.cameras_de_la_cour','COUR','input_text.securite_cour_dernier_verdict'],['camera.camera_salon','SALON','input_text.securite_salon_dernier_verdict'],
+    ['camera.camera_cuisine','CUISINE','input_text.securite_cuisine_dernier_verdict'],['camera.camera_salle','SALLE','input_text.securite_salle_dernier_verdict']];
+  const PEOPLE = [['mael','Mael','#5fdcff',['calendar.mael']],['vanessa','Vanessa','#f472b6',['calendar.vanessa']],['ryan','Ryan','#facc15',['calendar.ryan','calendar.cours_ryan']],
+    ['iwan','Iwan','#4ade80',['calendar.iwan','calendar.cours_iwan']],['aelia','Aelia','#b79cff',['calendar.aelia']]];
+  const PAGE_IDS = {
+    secu: ['input_boolean.securite_surveillance_active','input_boolean.alarme_sonore_active','script.alarme_sequence_intrusion','script.alarme_echo_sirene_boucle'].concat(CAMS.map(c=>c[2])),
+    maison: LIGHTS.map(l=>l[0]).concat(['select.javier_2_mode','sensor.javier_2_batterie','input_datetime.javier_2_dernier_passage','media_player.lg_webos_tv_uj630v','input_boolean.mode_nuit']),
+    famille: PEOPLE.map(p=>'sensor.adria_ou_'+p[0]),
+    energie: ['input_select.tempo_couleur_du_jour','sensor.prix_kwh_tempo','sensor.inster_ev_battery_level','sensor.inster_ev_range','binary_sensor.inster_ev_battery_plug',
+      'switch.inster_ev_charging','binary_sensor.inster_ev_battery_charge','climate.inster_climate_control','binary_sensor.inster_locked']
+  };
+  let S = {}, pageTimer = null, camTimer = null, reqN = 0;
+  const st = id => (S[id] && S[id].s) || '—';
+  const on = id => st(id) === 'on';
+  const esc = t => String(t).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  function pill(txt, color){ return `<span class="pill" style="color:${color}"><i></i>${txt}</span>`; }
+  function kpi(l, v, u, c){ return `<div class="kpi"><div class="l">${l}</div><div class="v" style="color:${c||'#fff'}">${esc(v)}${u?'<small>'+u+'</small>':''}</div></div>`; }
+
+  function renderPage(p){
+    if (p === 'secu'){
+      const alarmeEnCours = on('script.alarme_sequence_intrusion') || on('script.alarme_echo_sirene_boucle');
+      $('secStat').innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px">
+        ${on('input_boolean.securite_surveillance_active') ? pill('SURVEILLANCE ARMÉE','#4ade80') : pill('SURVEILLANCE DÉSARMÉE','#94a3b8')}
+        ${on('input_boolean.alarme_sonore_active') ? pill('ALARME SONORE ACTIVE','#f87171') : pill('SANS ALARME SONORE','#94a3b8')}
+        ${alarmeEnCours ? pill('🚨 ALARME EN COURS','#f87171') : ''}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:8px">Désarmer : seulement depuis le téléphone de Mael.</div>`;
+      CAMS.forEach(([cam,lb,vd]) => { const e = $('vd_'+cam); if (e) e.textContent = st(vd).replace(/^(\d{1,2}:\d{2}) /,'$1 · ').replace('PERSONNE_CONFIRMEE','personne').slice(0,90); });
+    } else if (p === 'maison'){
+      $('lights').innerHTML = LIGHTS.map(([id,n]) => `<button class="tile ${on(id)?'on':''}" data-l="${id}"><span class="n">💡 ${n}</span><span class="st">${on(id)?'Allumée':(st(id)==='off'?'Éteinte':st(id))}</span></button>`).join('');
+      document.querySelectorAll('[data-l]').forEach(b => b.onclick = () => doAction('light ' + (b.classList.contains('on') ? 'off ' : 'on ') + b.dataset.l, null, b.querySelector('.n').textContent));
+      const mode = {smart:'Nettoie',spiral:'Nettoie (spirale)',wall_follow:'Nettoie (bords)',standby:'À l\'arrêt',chargego:'Retour base',mop:'Serpillière'}[st('select.javier_2_mode')] || st('select.javier_2_mode');
+      const dp = st('input_datetime.javier_2_dernier_passage'); const d = dp.length > 10 ? dp.slice(8,10)+'/'+dp.slice(5,7)+' '+dp.slice(11,16) : dp;
+      $('aspiK').innerHTML = kpi('État', mode) + kpi('Batterie', Math.round(parseFloat(st('sensor.javier_2_batterie'))||0), '%', '#4ade80') + kpi('Dernier passage', d) + kpi('TV salon', {on:'Allumée',off:'Éteinte',unavailable:'Éteinte'}[st('media_player.lg_webos_tv_uj630v')] || st('media_player.lg_webos_tv_uj630v'));
+    } else if (p === 'famille'){
+      const LIEU = {maison:'🏠 À la maison', ecole:'🏫 À l\'école', travail:'🏭 Au travail', absent:'🚗 Absent', inconnu:'❔ Inconnu'};
+      $('people').innerHTML = PEOPLE.map(([k,n,c]) => { const [lieu, conf, src] = st('sensor.adria_ou_'+k).split('|');
+        return `<div class="person"><div class="av" style="background:${c}">${n[0]}</div><div><div class="nm">${n}</div><div class="lo">${LIEU[lieu] || esc(lieu || '—')}${src ? ' · ' + esc(src) : ''}</div></div></div>`; }).join('');
+    } else if (p === 'energie'){
+      const tc = st('input_select.tempo_couleur_du_jour'); const TC = {bleu:'#60a5fa',blanc:'#f1f5f9',rouge:'#f87171'};
+      $('tempoK').innerHTML = kpi('Aujourd\'hui', tc.toUpperCase(), '', TC[tc]) + kpi('Prix du kWh', (parseFloat(st('sensor.prix_kwh_tempo'))||0).toFixed(4).replace('.',','), '€');
+      const bat = Math.round(parseFloat(st('sensor.inster_ev_battery_level'))||0);
+      $('insterC').innerHTML = `<div class="grid2">${kpi('Batterie', bat, '%', '#4ade80')}${kpi('Autonomie', Math.round(parseFloat(st('sensor.inster_ev_range'))||0), 'km')}
+        ${kpi('Prise', on('binary_sensor.inster_ev_battery_plug') ? 'Branchée' : 'Débranchée')}${kpi('Charge', on('switch.inster_ev_charging') || on('binary_sensor.inster_ev_battery_charge') ? 'En cours' : 'Arrêtée')}
+        ${kpi('Clim', st('climate.inster_climate_control') === 'off' ? 'Arrêtée' : 'En marche')}${kpi('Portes', on('binary_sensor.inster_locked') ? 'OUVERTES' : 'Verrouillées', '', on('binary_sensor.inster_locked') ? '#f87171' : '#fff')}</div>
+        <div class="bar"><i style="width:${bat}%"></i></div>`;
+    }
+  }
+  function refreshPage(){
+    const p = document.body.dataset.page; if (!PAGE_IDS[p] || !cfg.token) return;
+    const id = 's' + (++reqN); A.states(id, JSON.stringify(PAGE_IDS[p]));
+  }
+  window.onStates = (id, json) => { try { Object.assign(S, JSON.parse(json)); } catch(e){} renderPage(document.body.dataset.page); };
+  function loadCams(){ CAMS.forEach(c => A.camera(c[0])); }
+  window.onCamera = (cam, data) => { const im = $('im_'+cam); if (im && data) im.src = data; };
+  window.onCalendar = (cal, json) => {
+    let ev = []; try { ev = JSON.parse(json); } catch(e){}
+    const who = (PEOPLE.find(p => p[3].includes(cal)) || [0,'Maison','#94a3b8'])[1];
+    ev.forEach(e => AGENDA.push({who, t: (e.start && (e.start.dateTime || e.start.date)) || '', s: e.summary || ''}));
+    AGENDA.sort((a,b) => a.t.localeCompare(b.t));
+    $('agenda').innerHTML = AGENDA.length ? AGENDA.map(e => `<div class="ev"><b>${e.t.length > 10 ? e.t.slice(11,16) : 'Journée'}</b><span><strong>${esc(e.who)}</strong> · ${esc(e.s)}</span></div>`).join('') : '<div class="ev">Rien de prévu aujourd\'hui.</div>';
+  };
+  let AGENDA = [];
+  function loadAgenda(){
+    AGENDA = []; $('agenda').innerHTML = '<div class="ev">Chargement…</div>';
+    const d = new Date(); const day = d.toISOString().slice(0,10);
+    const start = day + 'T00:00:00', end = day + 'T23:59:59';
+    PEOPLE.flatMap(p => p[3]).concat(['calendar.maison']).forEach(c => A.calendar(c, start, end));
+  }
+  $('cams').innerHTML = CAMS.map(([cam,lb]) => `<div class="cam" data-cam="${cam}"><img id="im_${cam}" alt=""><span class="lb">${lb}</span><span class="vd" id="vd_${cam}"></span></div>`).join('');
+  document.querySelectorAll('[data-cam]').forEach(c => c.onclick = () => A.camera(c.dataset.cam));
+
+  function setPage(p){
+    document.body.dataset.page = p;
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+    clearInterval(pageTimer); clearInterval(camTimer);
+    if (p !== 'adria'){ refreshPage(); pageTimer = setInterval(refreshPage, 10000); }
+    if (p === 'secu'){ loadCams(); camTimer = setInterval(loadCams, 15000); }
+    if (p === 'famille') loadAgenda();
+  }
+  document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => setPage(b.dataset.p));
+
+  // ---------- Afficher / retirer l'avatar ----------
+  function setAvatar(onA){
+    const show = onA !== false;
+    document.body.classList.toggle('noavatar', !show);
+    if (!show) setMode('chat');
+    try { A.setAvatarEnabled(show); } catch(e){}
+  }
 
   // ---------- Mode Avatar / Chat ----------
   function setMode(m){
@@ -438,15 +673,16 @@ select.in{appearance:none;-webkit-appearance:none;
   img.src = 'adria.png';
   function renderAdria(color){
     const isHolo = document.body.classList.contains('holo');
-    const key = (isHolo ? 'h' : 'c') + color;
+    const key = (isHolo ? 'h' : 'c') + color + '|' + blinkF;
     if (!img.complete || !img.naturalWidth || key === drawnKey) return;
     drawnKey = key;
     const w = cv.width, h = cv.height;
     cx.globalCompositeOperation = 'source-over'; cx.filter = 'none'; cx.globalAlpha = 1;
     cx.clearRect(0, 0, w, h);
-    if (!isHolo){ cx.drawImage(img, 0, 0); return; }
+    if (!isHolo){ cx.drawImage(img, 0, 0); drawLids(); return; }
     cx.filter = 'grayscale(1) brightness(1.2) contrast(1.05)';
     cx.drawImage(img, 0, 0); cx.filter = 'none';
+    drawLids();
     cx.globalCompositeOperation = 'color'; cx.fillStyle = color; cx.fillRect(0, 0, w, h);
     cx.globalCompositeOperation = 'destination-in'; cx.drawImage(img, 0, 0);
     cx.globalCompositeOperation = 'source-atop'; cx.fillStyle = 'rgba(255,255,255,.10)';
@@ -454,6 +690,35 @@ select.in{appearance:none;-webkit-appearance:none;
     cx.globalCompositeOperation = 'destination-in'; cx.globalAlpha = .9; cx.drawImage(img, 0, 0); cx.globalAlpha = 1;
     cx.globalCompositeOperation = 'source-over';
   }
+  // Clignement : paupières peintes (couleur de peau + cils) sur les yeux de l'image (coordonnées pour adria.png 600 px)
+  const EYES = [{x:230,y:315,rx:37,ry:20,top:'#9c5c45',bot:'#c28470'},{x:375,y:315,rx:37,ry:20,top:'#7f4a3a',bot:'#a26554'}];
+  let blinkF = 0;
+  function drawLids(){
+    if (blinkF <= 0) return;
+    const k = cv.width / 600;
+    EYES.forEach(e => {
+      const x = e.x*k, y = e.y*k, rx = e.rx*k, ry = e.ry*k, lid = (y - ry) + blinkF * 2 * ry * 0.92;
+      cx.save();
+      cx.beginPath(); cx.ellipse(x, y, rx + 2*k, ry + 2*k, 0, 0, Math.PI*2); cx.clip();
+      const g = cx.createLinearGradient(0, y - ry, 0, lid); g.addColorStop(0, e.top); g.addColorStop(1, e.bot);
+      cx.fillStyle = g; cx.fillRect(x - rx - 4*k, y - ry - 6*k, 2*rx + 8*k, lid - (y - ry) + 6*k);
+      cx.restore();
+      cx.save();
+      cx.strokeStyle = '#1c0e0a'; cx.lineWidth = 3.5*k; cx.lineCap = 'round';
+      cx.beginPath(); cx.moveTo(x - rx - 2*k, y + (lid - y) * .3); cx.quadraticCurveTo(x, lid + 5*k*blinkF, x + rx + 2*k, y + (lid - y) * .3); cx.stroke();
+      if (blinkF > .8){ cx.lineWidth = 2*k;
+        for (let i = -2; i <= 2; i++){ const lx = x + i*rx/3.2; cx.beginPath(); cx.moveTo(lx, lid + 3*k); cx.lineTo(lx + i*1.2*k, lid + 7*k); cx.stroke(); } }
+      cx.restore();
+    });
+  }
+  window.adriaBlink = f => { blinkF = f; drawFace(); };
+  (function blinker(){
+    setTimeout(() => {
+      const seq = [.5, 1, 1, .5, 0]; let i = 0;
+      const step = () => { blinkF = seq[i++]; drawFace(); if (i < seq.length) setTimeout(step, 45); else blinker(); };
+      step();
+    }, 2500 + Math.random()*3500);
+  })();
   function drawFace(){
     const e = EMO[emo] || EMO.neutre;
     holo.style.setProperty('--ec', e.c);
@@ -491,7 +756,7 @@ select.in{appearance:none;-webkit-appearance:none;
   if (!/^conversation\./.test(cfg.agent||'') && cfg.agent !== 'adria') { cfg.agent = DEFAULT_AGENT; A.saveConfig(JSON.stringify(cfg)); }
   if ((cfg.v||1) < 2) { cfg.agent = 'adria'; cfg.who = cfg.who || 'Mael'; cfg.v = 2; A.saveConfig(JSON.stringify(cfg)); }
   cfg.url = normUrl(cfg.url);
-  refreshHost(); setState('repos'); setMode(document.body.classList.contains('car') ? 'avatar' : (cfg.mode||'avatar')); setHolo(cfg.holo);
+  refreshHost(); setState('repos'); setMode(document.body.classList.contains('car') ? 'avatar' : (cfg.mode||'avatar')); setHolo(cfg.holo); setAvatar(document.body.classList.contains('car') ? true : cfg.avatar); setPage('adria');
   if (!cfg.token) openSheet();
   else add('Prêt — touche l\'orbe ou écris','sys');
 })();
