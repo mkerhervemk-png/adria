@@ -13,6 +13,7 @@
 
     <application
         android:label="Adria"
+        android:appCategory="game"
         android:icon="@mipmap/ic_adria"
         android:roundIcon="@mipmap/ic_adria"
         android:theme="@android:style/Theme.Material.NoActionBar"
@@ -36,6 +37,21 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Hologramme animé sur l'écran de la voiture, à l'arrêt seulement (Android 15+). -->
+        <activity
+            android:name=".ParkedActivity"
+            android:label="Adria · Hologramme"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.CAR_LAUNCHER" />
             </intent-filter>
         </activity>
 

@@ -52,7 +52,7 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);
         web.addJavascriptInterface(new Bridge(), "Android");
-        web.loadUrl("file:///android_asset/index.html");
+        web.loadUrl(startUrl());
         setContentView(web);
 
         Voice.init(this);
@@ -86,6 +86,9 @@ public class MainActivity extends Activity {
         web.destroy();
         super.onDestroy();
     }
+
+    /** Page chargée : la version voiture (ParkedActivity) ajoute ?car=1. */
+    protected String startUrl() { return "file:///android_asset/index.html"; }
 
     private void js(String code) {
         ui.post(() -> web.evaluateJavascript(code, null));
