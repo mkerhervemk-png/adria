@@ -32,7 +32,7 @@ public class MainActivity extends Activity {
 
     private static final int REQ_MIC = 42, REQ_NOTIF = 43;
 
-    private WebView web;
+    protected WebView web;
     private final ExecutorService io = Executors.newCachedThreadPool();
     private final Handler ui = new Handler(Looper.getMainLooper());
     private SpeechRecognizer recognizer;
@@ -91,7 +91,7 @@ public class MainActivity extends Activity {
     /** Page chargée : la version voiture (ParkedActivity) ajoute ?car=1. */
     protected String startUrl() { return "file:///android_asset/index.html"; }
 
-    private void js(String code) {
+    protected void js(String code) {
         ui.post(() -> web.evaluateJavascript(code, null));
     }
 
@@ -229,6 +229,28 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void stopListen() {
             ui.post(() -> { if (recognizer != null) recognizer.stopListening(); });
+        }
+
+        // ---- Adria TV : appairage sans clavier ----
+        @JavascriptInterface
+        public String tvInfo() { return TvPair.info(); }
+
+        @JavascriptInterface
+        public void sendToTv(String code) {
+            new Thread(() -> {
+                String r = TvPair.sendFromPhone(MainActivity.this, code);
+                js("onTvSend(" + q(r) + ")");
+            }).start();
+        }
+
+        @JavascriptInterface
+        public void showKeyboard() {
+            ui.post(() -> {
+                web.requestFocus();
+                android.view.inputmethod.InputMethodManager im = (android.view.inputmethod.InputMethodManager)
+                        getSystemService(INPUT_METHOD_SERVICE);
+                if (im != null) im.showSoftInput(web, android.view.inputmethod.InputMethodManager.SHOW_FORCED);
+            });
         }
     }
 
