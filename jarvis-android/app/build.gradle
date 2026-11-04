@@ -10,8 +10,8 @@ android {
         applicationId 'fr.kerherve.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 12
-        versionName '1.11'
+        versionCode 13
+        versionName '1.12'
     }
 
     signingConfigs {
@@ -28,7 +28,7 @@ android {
         }
     }
 
-    // Trois applis depuis le même code : « Adria » (écrans), « Adria Messages » (conversation vocale) et « Adria Hologramme » (à l'arrêt)
+    // Quatre applis depuis le même code : « Adria » (écrans), « Adria Messages » (conversation vocale) « Adria Hologramme » (à l'arrêt) et « Adria TV » (Fire TV)
     flavorDimensions = ['appli']
     productFlavors {
         adria { dimension 'appli' }
@@ -39,6 +39,10 @@ android {
         holo {
             dimension 'appli'
             applicationIdSuffix '.holo'
+        }
+        tv {
+            dimension 'appli'
+            applicationIdSuffix '.tv'
         }
     }
 

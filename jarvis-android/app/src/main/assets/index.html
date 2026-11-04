@@ -166,6 +166,16 @@ body.car #orb{width:96px;height:96px}
 body[data-page=secu] #pg-secu,body[data-page=maison] #pg-maison,body[data-page=famille] #pg-famille,body[data-page=energie] #pg-energie{display:block}
 body:not([data-page=adria]) .pa{display:none!important}
 body.noavatar .seg,body.noavatar #avatarView{display:none!important}
+/* ---------- Fire TV (télécommande) ---------- */
+body.tv :focus{outline:3px solid #25f4ee;outline-offset:3px;box-shadow:0 0 18px rgba(37,244,238,.55)}
+body.tv #orb,body.tv .orbrow .wave{display:none!important}
+body.tv .orbrow::after{content:"🎙 Dis « Alexa, demande à Adrien… »";font-size:15px;font-weight:700;color:var(--lab);padding:10px 0}
+body.tv #carRight #sub{font-size:24px}
+#tvAlert{position:fixed;inset:0;z-index:50;background:rgba(2,6,12,.94);display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px}
+#tvAlert.on{display:flex}
+#tvAlert img{max-width:86vw;max-height:72vh;border-radius:16px;border:3px solid #f87171;box-shadow:0 0 30px rgba(248,113,113,.5)}
+#tvAlert .t{font-size:26px;font-weight:900;color:#fecaca;text-align:center}
+#tvAlert .h{font-size:14px;color:var(--dim)}
 .h2{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;margin:14px 2px 8px}
 .h2:first-child{margin-top:4px}
 .card{border-radius:18px;background:var(--card);padding:12px 14px;margin-bottom:10px}
@@ -374,6 +384,7 @@ select.in{appearance:none;-webkit-appearance:none;
   </select>
 
   <div class="tg" id="tTts"><span>Lire la réponse à voix haute</span><div class="sw"></div></div>
+  <div class="tg" id="tBrig"><span>Voix Brigitte (comme les Echo)</span><div class="sw"></div></div>
   <div class="tg" id="tAuto"><span>Envoyer dès la fin de la dictée</span><div class="sw"></div></div>
   <div class="tg" id="tAvatar"><span>Afficher l'avatar d'Adria</span><div class="sw"></div></div>
   <div class="tg" id="tHolo"><span>Avatar en hologramme (sinon en couleurs)</span><div class="sw"></div></div>
@@ -393,7 +404,7 @@ select.in{appearance:none;-webkit-appearance:none;
   const A = window.Android;
   const DEFAULT_AGENT = 'adria';
   const ADRIA = {id:'adria',name:'ADRIA (routeur maison)'};
-  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,who:'Mael',tts:true,auto:true,alertIn:false,mode:'avatar',urlExt:'',holo:true,avatar:true},
+  let cfg = Object.assign({url:'http://192.168.1.53:8123',token:'',agent:DEFAULT_AGENT,who:'Mael',tts:true,auto:true,alertIn:false,mode:'avatar',urlExt:'',holo:true,avatar:true,brigitte:true},
                           JSON.parse(A.getConfig() || '{}'));
   let convId = null, busy = false, pending = null, agents = [];
 
@@ -494,7 +505,7 @@ select.in{appearance:none;-webkit-appearance:none;
   });
 
   // ---------- réglages ----------
-  const toggles = {tTts:'tts', tAuto:'auto', tAlertIn:'alertIn', tHolo:'holo', tAvatar:'avatar'};
+  const toggles = {tTts:'tts', tBrig:'brigitte', tAuto:'auto', tAlertIn:'alertIn', tHolo:'holo', tAvatar:'avatar'};
   let draft = {};
   function fillAgents(sel){
     const s = $('cAgent'); s.innerHTML = '';
@@ -633,7 +644,7 @@ select.in{appearance:none;-webkit-appearance:none;
     const start = day + 'T00:00:00', end = day + 'T23:59:59';
     PEOPLE.flatMap(p => p[3]).concat(['calendar.maison']).forEach(c => A.calendar(c, start, end));
   }
-  $('cams').innerHTML = CAMS.map(([cam,lb]) => `<div class="cam" data-cam="${cam}"><img id="im_${cam}" alt=""><span class="lb">${lb}</span><span class="vd" id="vd_${cam}"></span></div>`).join('');
+  $('cams').innerHTML = CAMS.map(([cam,lb]) => `<div class="cam" tabindex="0" data-cam="${cam}"><img id="im_${cam}" alt=""><span class="lb">${lb}</span><span class="vd" id="vd_${cam}"></span></div>`).join('');
   document.querySelectorAll('[data-cam]').forEach(c => c.onclick = () => A.camera(c.dataset.cam));
 
   function setPage(p){
@@ -801,6 +812,55 @@ select.in{appearance:none;-webkit-appearance:none;
     const right = document.createElement('div'); right.id = 'carRight'; right.className = 'pa';
     right.appendChild($('emo')); right.appendChild($('sub'));
     document.body.insertBefore(right, $('quick'));
+  }
+
+  // ---------- Version Fire TV : hologramme + pages, voix via les Echo ----------
+  if (/[?&]tv=1/.test(location.search)){
+    document.body.classList.add('car','tv');
+    const right = document.createElement('div'); right.id = 'carRight'; right.className = 'pa';
+    right.appendChild($('emo')); right.appendChild($('sub'));
+    document.body.insertBefore(right, $('quick'));
+    const al = document.createElement('div'); al.id = 'tvAlert';
+    al.innerHTML = '<div class="t" id="tvAT"></div><img id="tvAI" alt=""><div class="h">OK ou Retour pour fermer</div>';
+    document.body.appendChild(al);
+    let alTimer = null;
+    const closeAl = () => { al.classList.remove('on'); clearTimeout(alTimer); };
+    document.addEventListener('keydown', e => {
+      if (al.classList.contains('on')) { closeAl(); e.preventDefault(); return; }
+      if (e.key === 'Enter' && document.activeElement && document.activeElement.matches('[tabindex]')) { document.activeElement.click(); e.preventDefault(); }
+    });
+    // Ce que dit Adria sur les Echo : sous-titre + lèvres qui bougent
+    const TV_IDS = ['input_text.adria_avatar_parole','input_text.adria_voix_texte','input_text.securite_cour_dernier_verdict'];
+    let lastParole = null, lastVerdict = null, echoTalk = null;
+    const prevStates = window.onStates;
+    window.onStates = (id, json) => {
+      if (String(id).indexOf('tv') !== 0) return prevStates(id, json);
+      let o = {}; try { o = JSON.parse(json); } catch(e){ return; }
+      const pa = (o['input_text.adria_avatar_parole']||{}).s, tx = (o['input_text.adria_voix_texte']||{}).s;
+      if (pa && pa !== lastParole) {
+        const first = lastParole === null; lastParole = pa;
+        const [ts, len] = pa.split('|').map(Number);
+        if (!first && Date.now()/1000 - ts < 30) {
+          if (tx && tx !== 'unknown') { $('subQ').textContent = 'Adria dit'; $('subT').textContent = tx; }
+          window.onTts('start'); clearTimeout(echoTalk);
+          echoTalk = setTimeout(() => window.onTts('done'), Math.min(60000, Math.max(2500, (len||60) * 70)));
+        }
+      }
+      const v = (o['input_text.securite_cour_dernier_verdict']||{}).s;
+      if (v && v !== lastVerdict) {
+        const first = lastVerdict === null; lastVerdict = v; const V = v.toUpperCase();
+        if (!first && /PERSONNE|VEHICULE|VÉHICULE|VOITURE|INTRUS/.test(V) && !/DANS LA RUE|FAUX|AUCUN|RAS/.test(V)) {
+          $('tvAT').textContent = '⚠️ Cour : ' + v.slice(0, 140); $('tvAI').src = '';
+          al.classList.add('on'); A.camera('camera.cameras_de_la_cour');
+          clearTimeout(alTimer); alTimer = setTimeout(closeAl, 45000);
+        }
+      }
+    };
+    const prevCam = window.onCamera;
+    window.onCamera = (cam, data) => { if (cam === 'camera.cameras_de_la_cour' && al.classList.contains('on') && data) $('tvAI').src = data; prevCam(cam, data); };
+    let tvN = 0;
+    setInterval(() => { if (cfg.token) A.states('tv' + (++tvN), JSON.stringify(TV_IDS)); }, 2500);
+    setTimeout(() => { const b = document.querySelector('#tabs button'); if (b) b.focus(); }, 600);
   }
 
   // ---------- démarrage ----------
