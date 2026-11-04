@@ -56,6 +56,7 @@ public class MainActivity extends Activity {
         setContentView(web);
 
         Voice.init(this);
+        MsgBridge.syncConfig(this);
         Notifs.channels(this);
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
@@ -116,7 +117,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void saveConfig(String json) {
             HaClient.prefs(MainActivity.this).edit().putString("cfg_json", json).apply();
-            MsgBridge.send(MainActivity.this, "config", null);
+            MsgBridge.syncConfig(MainActivity.this);
         }
 
         @JavascriptInterface
@@ -206,12 +207,8 @@ public class MainActivity extends Activity {
         /** Afficher ou retirer l'avatar : active/désactive aussi l'écran « Adria · Hologramme » de la voiture. */
         @JavascriptInterface
         public void setAvatarEnabled(boolean on) {
-            try {
-                getPackageManager().setComponentEnabledSetting(
-                        new android.content.ComponentName(MainActivity.this, ParkedActivity.class),
-                        on ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED : PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                        PackageManager.DONT_KILL_APP);
-            } catch (Exception ignored) { }
+            // L'hologramme est maintenant l'appli séparée « Adria Hologramme »
+            MsgBridge.send(MainActivity.this, MsgBridge.HOLO, "avatar", on ? "on" : "off");
         }
 
         @JavascriptInterface

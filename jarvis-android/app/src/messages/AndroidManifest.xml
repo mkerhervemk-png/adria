@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Seule l'appli Adria (même signature) peut envoyer des messages à lire dans la voiture -->
-    <permission
-        android:name="fr.kerherve.jarvis.BRIDGE"
-        android:protectionLevel="signature" />
-
     <application android:label="Adria Messages">
+
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
 
         <activity
             android:name=".MessagesActivity"

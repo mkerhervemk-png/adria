@@ -43,6 +43,7 @@ jobs:
         run: |
           cp app/build/outputs/apk/adria/release/app-adria-release.apk Adria.apk
           cp app/build/outputs/apk/messages/release/app-messages-release.apk Adria-Messages.apk
+          cp app/build/outputs/apk/holo/release/app-holo-release.apk Adria-Hologramme.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Jarvis-apk
@@ -51,5 +52,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="adria-v1.10-${{ github.run_number }}"
-          gh release create "$TAG" Adria.apk Adria-Messages.apk --target "${{ github.sha }}" --title "Adria $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease
+          TAG="adria-v1.11-${{ github.run_number }}"
+          gh release create "$TAG" Adria.apk Adria-Messages.apk Adria-Hologramme.apk --target "${{ github.sha }}" --title "Adria $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease

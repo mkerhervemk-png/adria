@@ -134,15 +134,25 @@ body.speaking #holo{--glow:18px}
 #emo{font-size:9px;font-weight:900;letter-spacing:1.5px;color:var(--lab);text-transform:uppercase}
 
 /* ---------- Écran de la voiture (à l'arrêt) : paysage ---------- */
-body.car{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto auto;column-gap:10px}
+body.car{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr) 84px;grid-template-rows:auto minmax(0,1fr) auto auto;column-gap:10px}
 body.car .seg,body.car #log{display:none!important}
 body.car .top{grid-column:2;grid-row:1}
-body.car #avatarView{grid-column:1;grid-row:1/5;padding:6px}
-body.car #holo{height:min(88vh,640px)}
-body.car #carRight{grid-column:2;grid-row:2;display:flex;flex-direction:column;justify-content:center;gap:8px;padding:0 14px;min-height:0}
-body.car #carRight #sub{max-height:none;font-size:20px;flex:0 1 auto;overflow-y:auto}
-body.car #quick{grid-column:2;grid-row:3}
-body.car .dock{grid-column:2;grid-row:4;margin:0 12px 10px}
+body.car #avatarView{grid-column:1;grid-row:1/5;padding:6px;min-height:0}
+body.car #holo{height:min(80vh,600px)}
+body.car #carRight{grid-column:2;grid-row:2;display:flex;flex-direction:column;justify-content:flex-start;gap:6px;padding:4px 14px 0;min-height:0;overflow:hidden}
+body.car #carRight #emo{flex:0 0 auto;text-align:center}
+body.car #carRight #sub{max-height:none;min-height:0;font-size:19px;flex:0 1 auto;overflow-y:auto}
+body.car #quick{grid-column:2;grid-row:3;min-width:0}
+body.car .dock{grid-column:2;grid-row:4;margin:0 12px 10px;min-width:0}
+/* onglets : barre verticale à droite, grosses cibles tactiles */
+body.car #tabs{grid-column:3;grid-row:1/5;flex-direction:column;justify-content:center;gap:6px;margin:8px 8px 8px 0;padding:6px}
+body.car #tabs button{flex:0 0 auto;min-height:64px;padding:8px 2px;font-size:9px}
+body.car #tabs button svg{width:26px;height:26px}
+/* autres pages : toute la largeur à gauche des onglets, boutons sur 4 colonnes */
+body.car:not([data-page=adria]) .top{grid-column:1/3}
+body.car .page{grid-column:1/3;grid-row:2/5;min-height:0}
+body.car .page .grid2{grid-template-columns:repeat(4,minmax(0,1fr))}
+body.car #people,body.car #agenda{columns:2;column-gap:10px}
 body.car #orb{width:96px;height:96px}
 
 .top,.seg,#quick,.dock,#tabs{flex-shrink:0}
@@ -156,7 +166,6 @@ body.car #orb{width:96px;height:96px}
 body[data-page=secu] #pg-secu,body[data-page=maison] #pg-maison,body[data-page=famille] #pg-famille,body[data-page=energie] #pg-energie{display:block}
 body:not([data-page=adria]) .pa{display:none!important}
 body.noavatar .seg,body.noavatar #avatarView{display:none!important}
-body.car #tabs{display:none}
 .h2{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;margin:14px 2px 8px}
 .h2:first-child{margin-top:4px}
 .card{border-radius:18px;background:var(--card);padding:12px 14px;margin-bottom:10px}
@@ -789,7 +798,7 @@ select.in{appearance:none;-webkit-appearance:none;
   // ---------- Version voiture (Android Auto, à l'arrêt) ----------
   if (/[?&]car=1/.test(location.search)){
     document.body.classList.add('car');
-    const right = document.createElement('div'); right.id = 'carRight';
+    const right = document.createElement('div'); right.id = 'carRight'; right.className = 'pa';
     right.appendChild($('emo')); right.appendChild($('sub'));
     document.body.insertBefore(right, $('quick'));
   }

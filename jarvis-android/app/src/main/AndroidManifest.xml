@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Pont entre les 3 applis Adria (même signature uniquement) -->
+    <permission
+        android:name="fr.kerherve.jarvis.BRIDGE"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="fr.kerherve.jarvis.BRIDGE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -10,6 +15,7 @@
         <intent><action android:name="android.speech.RecognitionService" /></intent>
         <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
         <package android:name="fr.kerherve.jarvis.messages" />
+        <package android:name="fr.kerherve.jarvis.holo" />
     </queries>
 
     <application
@@ -17,10 +23,5 @@
         android:roundIcon="@mipmap/ic_adria"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:usesCleartextTraffic="true">
-
-        <meta-data
-            android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" />
-    </application>
+        android:usesCleartextTraffic="true" />
 </manifest>

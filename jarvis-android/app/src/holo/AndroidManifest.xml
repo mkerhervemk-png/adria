@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Appli « jeu » séparée : Android Auto la réserve à la voiture garée.
+         Ainsi l'appli Adria (écrans) reste disponible en roulant. -->
+    <application
+        android:label="Adria Hologramme"
+        android:appCategory="game">
+
+        <activity
+            android:name=".ParkedActivity"
+            android:label="Adria Hologramme"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.CAR_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Reçoit d'Adria la configuration et l'option « afficher l'avatar » -->
+        <receiver
+            android:name=".BridgeReceiver"
+            android:exported="true"
+            android:permission="fr.kerherve.jarvis.BRIDGE">
+            <intent-filter>
+                <action android:name="fr.kerherve.jarvis.BRIDGE_MSG" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
