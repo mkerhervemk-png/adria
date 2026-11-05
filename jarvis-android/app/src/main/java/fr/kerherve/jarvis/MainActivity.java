@@ -59,17 +59,17 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(bg);
         root.addView(web, new android.widget.FrameLayout.LayoutParams(-1, -1));
         root.setOnApplyWindowInsetsListener((v, ins) -> {
-            int l, t, r, b;
+            int il, it, ir, ib;
             if (Build.VERSION.SDK_INT >= 30) {
                 android.graphics.Insets i = ins.getInsets(android.view.WindowInsets.Type.systemBars()
                         | android.view.WindowInsets.Type.displayCutout() | android.view.WindowInsets.Type.ime());
-                l = i.left; t = i.top; r = i.right; b = i.bottom;
+                il = i.left; it = i.top; ir = i.right; ib = i.bottom;
             } else {
-                l = ins.getSystemWindowInsetLeft(); t = ins.getSystemWindowInsetTop();
-                r = ins.getSystemWindowInsetRight(); b = ins.getSystemWindowInsetBottom();
+                il = ins.getSystemWindowInsetLeft(); it = ins.getSystemWindowInsetTop();
+                ir = ins.getSystemWindowInsetRight(); ib = ins.getSystemWindowInsetBottom();
             }
-            int[] p = fallbackInsets(v, l, t, r, b);
-            v.setPadding(p[0], p[1], p[2], p[3]);
+            int[] pd = fallbackInsets(v, il, it, ir, ib);
+            v.setPadding(pd[0], pd[1], pd[2], pd[3]);
             return ins;
         });
         setContentView(root);
