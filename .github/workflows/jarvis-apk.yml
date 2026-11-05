@@ -53,5 +53,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="adria-v1.13-${{ github.run_number }}"
+          TAG="adria-v1.14-${{ github.run_number }}"
           gh release create "$TAG" Adria.apk Adria-Messages.apk Adria-Hologramme.apk Adria-TV.apk --target "${{ github.sha }}" --title "Adria $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease

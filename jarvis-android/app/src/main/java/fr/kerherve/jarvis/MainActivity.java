@@ -53,7 +53,26 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         web.addJavascriptInterface(new Bridge(), "Android");
         web.loadUrl(startUrl());
-        setContentView(web);
+        // Android 15+ : affichage bord à bord → on réserve la place des barres système
+        // (barre d'état du téléphone, barre latérale d'Android Auto, encoche).
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.setBackgroundColor(bg);
+        root.addView(web, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        root.setOnApplyWindowInsetsListener((v, ins) -> {
+            int l, t, r, b;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets i = ins.getInsets(android.view.WindowInsets.Type.systemBars()
+                        | android.view.WindowInsets.Type.displayCutout() | android.view.WindowInsets.Type.ime());
+                l = i.left; t = i.top; r = i.right; b = i.bottom;
+            } else {
+                l = ins.getSystemWindowInsetLeft(); t = ins.getSystemWindowInsetTop();
+                r = ins.getSystemWindowInsetRight(); b = ins.getSystemWindowInsetBottom();
+            }
+            int[] p = fallbackInsets(v, l, t, r, b);
+            v.setPadding(p[0], p[1], p[2], p[3]);
+            return ins;
+        });
+        setContentView(root);
 
         Voice.init(this);
         MsgBridge.syncConfig(this);
@@ -90,6 +109,9 @@ public class MainActivity extends Activity {
 
     /** Page chargée : la version voiture (ParkedActivity) ajoute ?car=1. */
     protected String startUrl() { return "file:///android_asset/index.html"; }
+
+    /** Marges finales ; ParkedActivity ajoute une marge de secours si la voiture ne signale pas sa barre. */
+    protected int[] fallbackInsets(android.view.View v, int l, int t, int r, int b) { return new int[]{l, t, r, b}; }
 
     protected void js(String code) {
         ui.post(() -> web.evaluateJavascript(code, null));
