@@ -1,0 +1,24 @@
+name: ADRIA Core
+version: "0.1.0"
+slug: adria_core
+description: Mémoire longue d'ADRIA (sans IA) — garde l'historique des listes ADRIA et le rend cherchable.
+arch:
+  - amd64
+init: false
+startup: application
+boot: auto
+homeassistant_api: true
+options:
+  heure_sync: "03:30"
+  listes:
+    - todo.adria_journal
+    - todo.adria_memoire
+    - todo.adria_jarvis_episodes
+    - todo.adria_memoire_perso
+    - todo.adria_souvenirs
+    - todo.adria_journal_interieur
+    - todo.adria_observations
+schema:
+  heure_sync: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
+  listes:
+    - str
