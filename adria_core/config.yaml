@@ -1,5 +1,5 @@
 name: ADRIA Core
-version: "0.1.0"
+version: "0.2.0"
 slug: adria_core
 description: Mémoire longue d'ADRIA (sans IA) — garde l'historique des listes ADRIA et le rend cherchable.
 arch:
@@ -8,6 +8,9 @@ init: false
 startup: application
 boot: auto
 homeassistant_api: true
+map:
+  - type: media
+    read_only: true
 options:
   heure_sync: "03:30"
   listes:
@@ -18,7 +21,21 @@ options:
     - todo.adria_souvenirs
     - todo.adria_journal_interieur
     - todo.adria_observations
+  archive_dossier: /media/adria_memoire
+  historique_jours: 14
+  historique:
+    - person.*
+    - sensor.adria_ou_*
+    - light.*
+    - media_player.lg_webos_tv_uj630v
+    - media_player.salon_decodeur_salon_media_player
+    - input_select.quart_mael
+    - input_boolean.mode_nuit
 schema:
   heure_sync: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
   listes:
     - str
+  archive_dossier: str?
+  historique_jours: int(1,30)?
+  historique:
+    - str?
