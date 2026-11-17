@@ -9,14 +9,18 @@ Facultative : si l'appli est arrêtée, ADRIA fonctionne comme avant.
 """
 
 import asyncio
+import fnmatch
+import glob
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
-from store import Memoire
+from store import Memoire, lignes_historique, lire_archive
 
 LOG = logging.getLogger("adria_core")
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -24,7 +28,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def lire_options() -> dict:
@@ -48,6 +52,13 @@ class Core:
             "todo.adria_observations",
         ]
         self.heure_sync: str = opts.get("heure_sync") or "03:30"
+        self.archive: str = opts.get("archive_dossier") or "/media/adria_memoire"
+        self.historique: list[str] = opts.get("historique") or [
+            "person.*", "sensor.adria_ou_*", "light.*", "media_player.lg_webos_tv_uj630v",
+            "media_player.salon_decodeur_salon_media_player", "input_select.quart_mael",
+            "input_boolean.mode_nuit",
+        ]
+        self.historique_jours: int = int(opts.get("historique_jours") or 14)
         self.memoire = Memoire(BASE)
         self.derniere_sync: str | None = None
         self.derniere_erreur: str | None = None
@@ -79,10 +90,58 @@ class Core:
                 nouvelles += self.memoire.ajouter(liste.removeprefix("todo."), items)
             except Exception as e:  # une liste absente ne bloque pas les autres
                 erreurs.append(f"{liste}: {e}")
+        try:
+            nouvelles += self.importer_archive()
+        except Exception as e:
+            erreurs.append(f"archive: {e}")
+        try:
+            nouvelles += await self.importer_historique()
+        except Exception as e:
+            erreurs.append(f"historique: {e}")
         self.derniere_sync = datetime.now().isoformat(timespec="seconds")
         self.derniere_erreur = "; ".join(erreurs)[:250] or None
         LOG.info("Synchronisation : %s lignes nouvelles, %s erreurs", nouvelles, len(erreurs))
         await self.publier_etat()
+
+    def importer_archive(self) -> int:
+        """Relit l'archive /media/adria_memoire (*.md) ; les doublons sont ignorés."""
+        par_source: dict[str, list[dict]] = {}
+        for f in sorted(glob.glob(os.path.join(self.archive, "**", "*.md"), recursive=True)):
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for it in lire_archive(fh.read()):
+                    par_source.setdefault("archive/" + it["src"], []).append(it)
+        return sum(self.memoire.ajouter(src, items) for src, items in par_source.items())
+
+    async def importer_historique(self) -> int:
+        """Garde l'historique HA des entités choisies, depuis le dernier import."""
+        if not self.historique:
+            return 0
+        try:
+            fuseau = ZoneInfo((await self.appel("GET", "/config")).get("time_zone") or "Europe/Paris")
+        except Exception:
+            fuseau = None
+        etats = await self.appel("GET", "/states")
+        noms = {e["entity_id"]: e.get("attributes", {}).get("friendly_name") or e["entity_id"]
+                for e in etats}
+        entites = sorted({eid for eid in noms for motif in self.historique
+                          if fnmatch.fnmatch(eid, motif)})
+        if not entites:
+            return 0
+        fin = datetime.now(timezone.utc)
+        dernier = self.memoire.meta("historique_jusqu_a")
+        debut = (datetime.fromisoformat(dernier) - timedelta(minutes=5) if dernier
+                 else fin - timedelta(days=self.historique_jours))
+        nouvelles = 0
+        for i in range(0, len(entites), 20):
+            lot = ",".join(entites[i:i + 20])
+            serie = await self.appel(
+                "GET",
+                f"/history/period/{quote(debut.isoformat())}?end_time={quote(fin.isoformat())}"
+                f"&filter_entity_id={lot}&minimal_response&no_attributes",
+            )
+            nouvelles += self.memoire.ajouter("historique", lignes_historique(serie, noms, fuseau))
+        self.memoire.meta("historique_jusqu_a", fin.isoformat())
+        return nouvelles
 
     async def publier_etat(self) -> None:
         s = self.memoire.stats()
@@ -111,7 +170,8 @@ class Core:
                 int(data.get("n", 5)),
                 data.get("exclure_sources") or [],
             )
-            texte = " ; ".join(f"[{l['date']} {l['source']}] {l['texte']}" for l in lignes)
+            texte = " ; ".join(
+                f"[{(l['date'] + ' ') if l['date'] else ''}{l['source']}] {l['texte']}" for l in lignes)
             resultat = {"req_id": req_id, "ok": True, "lignes": lignes, "texte": texte[:2000]}
         except Exception as e:
             resultat = {"req_id": req_id, "ok": False, "lignes": [], "texte": "", "erreur": str(e)[:200]}
