@@ -46,3 +46,54 @@ def test_exclure_une_source():
 
 def test_question_vide():
     assert memoire().chercher("le la les", 5) == []
+
+
+def test_archive_et_dates():
+    from store import lire_archive
+    m = Memoire(":memory:")
+    items = lire_archive("[2026-10-02] [souvenir] Sortie au Val-André en famille\nligne sans format\n")
+    assert len(items) == 1
+    m.ajouter("archive/souvenir", items)
+    r = m.chercher("tu te souviens du Val-André ?")
+    assert r and r[0]["date"] == "2026-10-02" and r[0]["source"] == "archive/souvenir"
+
+
+def test_doublon_liste_et_archive():
+    m = Memoire(":memory:")
+    m.ajouter("adria_souvenirs", [{"summary": "Sortie au Val-André en famille"}])
+    m.ajouter("archive/souvenir", [{"date": "2026-10-02", "summary": "Sortie au Val-André en famille"}])
+    assert len(m.chercher("Val-André", 5)) == 1
+
+
+def test_historique():
+    from zoneinfo import ZoneInfo
+    from store import lignes_historique
+    serie = [[
+        {"entity_id": "person.ryan", "state": "home", "last_changed": "2026-11-10T16:30:00+00:00"},
+        {"state": "home", "last_changed": "2026-11-10T16:31:00+00:00"},
+        {"state": "unavailable", "last_changed": "2026-11-10T17:00:00+00:00"},
+        {"state": "not_home", "last_changed": "2026-11-11T06:10:00+00:00"},
+    ]]
+    items = lignes_historique(serie, {"person.ryan": "Ryan"}, ZoneInfo("Europe/Paris"))
+    assert [i["summary"] for i in items] == ["10/11 17:30 Ryan : à la maison", "11/11 07:10 Ryan : absent"]
+    m = Memoire(":memory:")
+    m.ajouter("historique", items)
+    assert m.ajouter("historique", items) == 0  # ré-import sans doublon
+    assert m.chercher("Ryan absent")[0]["date"] == "2026-11-11"
+
+
+def test_migration_base_v010(tmp_path):
+    import sqlite3
+    chemin = str(tmp_path / "v010.db")
+    db = sqlite3.connect(chemin)
+    db.executescript("""
+        CREATE TABLE lignes (id INTEGER PRIMARY KEY, source TEXT NOT NULL, uid TEXT,
+            resume TEXT NOT NULL, detail TEXT, empreinte TEXT NOT NULL UNIQUE,
+            first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
+        CREATE VIRTUAL TABLE lignes_fts USING fts5(resume, detail,
+            tokenize = 'unicode61 remove_diacritics 2');
+    """)
+    db.close()
+    m = Memoire(chemin)
+    m.ajouter("historique", [{"date": "2026-11-01", "summary": "Lampe salon : allumé"}])
+    assert m.chercher("lampe salon")[0]["date"] == "2026-11-01"
