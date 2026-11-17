@@ -57,6 +57,10 @@ class Memoire:
                 date_evt TEXT
             );
             CREATE TABLE IF NOT EXISTS meta (cle TEXT PRIMARY KEY, valeur TEXT);
+            CREATE TABLE IF NOT EXISTS ia_stats (
+                quand REAL NOT NULL, moteur TEXT NOT NULL, profondeur TEXT,
+                ok INTEGER NOT NULL, duree REAL, raison TEXT
+            );
             CREATE VIRTUAL TABLE IF NOT EXISTS lignes_fts USING fts5(
                 resume, detail, tokenize = 'unicode61 remove_diacritics 2'
             );
@@ -135,6 +139,24 @@ class Memoire:
             })
             if len(res) >= max(1, min(int(n), 20)):
                 break
+        return res
+
+    def noter_ia(self, moteur: str, profondeur: str, ok: bool, duree: float | None,
+                 raison: str | None, quand: float | None = None) -> None:
+        import time
+        self.db.execute("INSERT INTO ia_stats VALUES (?, ?, ?, ?, ?, ?)",
+                        (quand or time.time(), moteur, profondeur, int(ok), duree, raison))
+        self.db.commit()
+
+    def stats_ia(self, depuis_s: float = 86400, maintenant: float | None = None) -> dict:
+        import time
+        t0 = (maintenant or time.time()) - depuis_s
+        res = {}
+        for r in self.db.execute(
+            "SELECT moteur, COUNT(*), SUM(ok), AVG(CASE WHEN ok = 1 THEN duree END)"
+            " FROM ia_stats WHERE quand >= ? GROUP BY moteur", (t0,)):
+            res[r[0]] = {"appels": r[1], "ok": r[2] or 0,
+                         "moy_s": round(r[3], 1) if r[3] is not None else None}
         return res
 
     def stats(self) -> dict:

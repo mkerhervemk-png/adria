@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+from routeur import Routeur
 from store import Memoire, lignes_historique, lire_archive
 
 LOG = logging.getLogger("adria_core")
@@ -28,7 +29,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def lire_options() -> dict:
@@ -59,7 +60,11 @@ class Core:
             "input_boolean.mode_nuit",
         ]
         self.historique_jours: int = int(opts.get("historique_jours") or 14)
+        self.ollama_url: str = opts.get("ollama_url") or "http://76e18fb5-ollama:11434"
+        self.ollama_modele: str = opts.get("ollama_modele") or "llama3.2:3b"
         self.memoire = Memoire(BASE)
+        self.routeur = Routeur(self)
+        self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
         self.derniere_erreur: str | None = None
         self.session: aiohttp.ClientSession | None = None
@@ -68,14 +73,101 @@ class Core:
     def entetes(self) -> dict:
         return {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
-    async def appel(self, methode: str, chemin: str, donnees: dict | None = None) -> dict:
+    async def appel(self, methode: str, chemin: str, donnees: dict | None = None,
+                    delai: float = 60) -> dict:
         assert self.session is not None
         async with self.session.request(
             methode, f"{API}{chemin}", headers=self.entetes, json=donnees,
-            timeout=aiohttp.ClientTimeout(total=60),
+            timeout=aiohttp.ClientTimeout(total=delai),
         ) as r:
             r.raise_for_status()
             return await r.json(content_type=None)
+
+    # --- outils pour le routeur IA -------------------------------------------------
+    async def etat(self, entity_id: str) -> str | None:
+        try:
+            return (await self.appel("GET", f"/states/{entity_id}")).get("state")
+        except Exception:
+            return None
+
+    async def ai_task(self, entite: str, prompt: str, tache: str) -> str:
+        rep = await self.appel(
+            "POST", "/services/ai_task/generate_data?return_response",
+            {"entity_id": entite, "instructions": prompt, "task_name": tache},
+            delai=300,
+        )
+        data = (rep.get("service_response") or {}).get("data")
+        return data if isinstance(data, str) else ("" if data is None else json.dumps(data, ensure_ascii=False))
+
+    async def ollama(self, prompt: str) -> str:
+        assert self.session is not None
+        try:
+            async with self.session.post(
+                f"{self.ollama_url}/api/generate",
+                json={"model": self.ollama_modele, "prompt": prompt, "stream": False, "keep_alive": -1,
+                      "think": False, "options": {"num_ctx": 4096}},
+                timeout=aiohttp.ClientTimeout(total=300),
+            ) as r:
+                r.raise_for_status()
+                return (await r.json()).get("response", "")
+        except aiohttp.ClientError as e:  # Ollama injoignable en direct : passer par HA
+            LOG.warning("Ollama direct indisponible (%s), passage par ai_task.adria_secours", e)
+            return await self.ai_task("ai_task.adria_secours", prompt, "adria_core_ollama")
+
+    async def statut(self, texte: str) -> None:
+        try:
+            await self.appel("POST", "/services/input_text/set_value", {
+                "entity_id": "input_text.avatar_anti_boucle_status",
+                "value": (datetime.now().strftime("%H:%M") + " | " + texte)[:255]})
+        except Exception:
+            pass
+
+    async def incrementer(self, compteur: str) -> None:
+        try:
+            await self.appel("POST", "/services/counter/increment", {"entity_id": compteur})
+        except Exception:
+            pass
+
+    async def noter(self, moteur: str, prof: str, ok: bool, duree: float, raison: str | None) -> None:
+        self.memoire.noter_ia(moteur, prof, ok, duree, raison)
+        if ok:
+            self.dernier_moteur = moteur
+
+    async def repondre_ia(self, data: dict) -> None:
+        req_id = data.get("req_id", "")
+        try:
+            res = await self.routeur.demander(
+                str(data.get("prompt") or ""),
+                str(data.get("profondeur") or "rapide"),
+                str(data.get("task_name") or "adria"),
+                str(data.get("prompt_secours") or ""),
+                str(data.get("force_gemini")).lower() == "true",
+            )
+        except Exception as e:
+            LOG.exception("Routeur IA")
+            res = {"ok": False, "data": "", "erreur": str(e)[:200]}
+        res["req_id"] = req_id
+        try:
+            await self.appel("POST", "/events/adria_core_ia_resultat", res)
+        except Exception as e:
+            LOG.warning("Résultat IA non envoyé : %s", e)
+        await self.publier_etat_ia()
+
+    async def publier_etat_ia(self) -> None:
+        try:
+            await self.appel("POST", "/states/sensor.adria_core_ia", {
+                "state": self.dernier_moteur or "aucun",
+                "attributes": {
+                    "friendly_name": "ADRIA Core — routeur IA",
+                    "icon": "mdi:lan",
+                    "moteurs_24h": self.memoire.stats_ia(86400),
+                    "moteurs_7j": self.memoire.stats_ia(7 * 86400),
+                    "coupe_circuit": self.routeur.cc.etat(),
+                    "version": VERSION,
+                },
+            })
+        except Exception as e:
+            LOG.warning("Etat IA non publié : %s", e)
 
     async def synchroniser(self) -> None:
         nouvelles = 0
@@ -189,7 +281,8 @@ class Core:
                     rep = await ws.receive_json()
                     if rep.get("type") != "auth_ok":
                         raise RuntimeError(f"auth refusée : {rep}")
-                    for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser"), 1):
+                    for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser",
+                                             "adria_core_ia"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
                     attente = 5
@@ -202,6 +295,8 @@ class Core:
                         e = m["event"]
                         if e["event_type"] == "adria_core_recherche":
                             asyncio.create_task(self.repondre(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_ia":
+                            asyncio.create_task(self.repondre_ia(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -223,6 +318,7 @@ class Core:
         async with aiohttp.ClientSession() as session:
             self.session = session
             await asyncio.sleep(10)  # laisser Home Assistant finir de démarrer
+            await self.publier_etat_ia()
             await self.synchroniser()
             await asyncio.gather(self.ecouter(), self.planifier())
 

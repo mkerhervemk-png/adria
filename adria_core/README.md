@@ -1,6 +1,12 @@
-# ADRIA Core (v0.2.0)
+# ADRIA Core (v0.3.0)
 
 Mémoire longue d'ADRIA, sans IA.
+
+Nouveau en 0.3.0 — routeur IA :
+- événement `adria_core_ia` {req_id, prompt, prompt_secours, profondeur (interactif|rapide|profond), task_name, force_gemini} → réponse `adria_core_ia_resultat` {req_id, ok, data, moteur, duree} ;
+- même chaîne que le routeur YAML du 11/11 (Gemini → Gemini Lite → [Claude si interrupteur ON] → Ollama ; repli à la voix) ; Ollama appelé en direct (llama3.2:3b, arrêté vraiment au délai), sinon via ai_task.adria_secours ;
+- coupe-circuit : 3 échecs en 10 min → moteur sauté 15 min ;
+- statistiques par moteur (24 h / 7 j) et coupe-circuit dans `sensor.adria_core_ia`.
 
 Nouveau en 0.2.0 :
 - relit l'archive `/media/adria_memoire/*.md` (lignes « [AAAA-MM-JJ] [source] texte », sources `archive/...`) avec la vraie date de chaque ligne ;
