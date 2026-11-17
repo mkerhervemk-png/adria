@@ -1,6 +1,12 @@
-# ADRIA Core (v0.3.1)
+# ADRIA Core (v0.4.0)
+
+**Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
 Mémoire longue d'ADRIA, sans IA.
+
+Nouveau en 0.4.0 — agent Mémoire (lot M2a) :
+- carnet de bord du soir + réflexion d'ADRIA faits par le Core à 23h40 (option `heure_carnet`) si `input_boolean.adria_core_memoire` est ON (et `adria_jarvis_actif` ON) : même prompt et même sortie que l'automatisation HA « Jarvis P4 », avec en plus PRESENCES_REELLES tirées de l'historique du Core ; un seul appel IA via le routeur du Core ;
+- événement `adria_core_carnet` {essai: true|false, forcer} → `adria_core_carnet_resultat` ; `essai` n'écrit rien dans HA ; dernier résultat dans `sensor.adria_core` (attribut dernier_carnet).
 
 Nouveau en 0.3.1 — recherche par période (agent Mémoire, lot M1) :
 - une question qui nomme une période (« en octobre », « la semaine dernière », « le week-end dernier », « mardi dernier », « hier », « le 24/10 », « le 24 octobre ») rend les lignes datées de cette période : souvenirs et carnets de bord d'abord, puis journal, témoin, historique, observations ; triées par date ;

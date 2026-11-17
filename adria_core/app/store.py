@@ -1,6 +1,8 @@
 """Mémoire longue d'ADRIA : stockage SQLite + recherche plein texte (FTS5).
 
-Rien n'est jamais effacé : une ligne déjà vue met seulement à jour `last_seen`.
+RÈGLE PERMANENTE (validée par Mael le 17/11/2026) : le Core n'efface JAMAIS une ligne, quelle que soit la
+version. Une ligne déjà vue met seulement à jour `last_seen`. Les purges ne concernent que les
+listes de Home Assistant (mémoire de travail), jamais cette base.
 """
 
 import hashlib

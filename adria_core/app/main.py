@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+from memoire_agent import AgentMemoire
 from routeur import Routeur
 from store import Memoire, lignes_historique, lire_archive
 
@@ -29,7 +30,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 
 
 def lire_options() -> dict:
@@ -64,6 +65,8 @@ class Core:
         self.ollama_modele: str = opts.get("ollama_modele") or "llama3.2:3b"
         self.memoire = Memoire(BASE)
         self.routeur = Routeur(self)
+        self.agent_memoire = AgentMemoire(self)
+        self.heure_carnet: str = opts.get("heure_carnet") or "23:40"
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
         self.derniere_erreur: str | None = None
@@ -248,6 +251,7 @@ class Core:
                     "depuis": s["depuis"],
                     "derniere_sync": self.derniere_sync,
                     "derniere_erreur": self.derniere_erreur,
+                    "dernier_carnet": self.agent_memoire.dernier or None,
                     "version": VERSION,
                 },
             })
@@ -269,6 +273,22 @@ class Core:
             resultat = {"req_id": req_id, "ok": False, "lignes": [], "texte": "", "erreur": str(e)[:200]}
         await self.appel("POST", "/events/adria_core_resultat", resultat)
 
+    async def faire_carnet(self, data: dict | None = None) -> None:
+        data = data or {}
+        essai = str(data.get("essai")).lower() == "true"
+        try:
+            res = await self.agent_memoire.carnet(essai=essai,
+                                                  forcer=str(data.get("forcer")).lower() == "true")
+        except Exception as e:
+            LOG.exception("Carnet de bord")
+            res = {"ok": False, "raison": str(e)[:200]}
+        LOG.info("Carnet de bord (%s) : %s", "essai" if essai else "réel", res)
+        try:
+            await self.appel("POST", "/events/adria_core_carnet_resultat", res)
+        except Exception:
+            pass
+        await self.publier_etat()
+
     async def ecouter(self) -> None:
         """Ecoute les événements ; se reconnecte seul en cas de coupure."""
         attente = 5
@@ -282,7 +302,7 @@ class Core:
                     if rep.get("type") != "auth_ok":
                         raise RuntimeError(f"auth refusée : {rep}")
                     for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser",
-                                             "adria_core_ia"), 1):
+                                             "adria_core_ia", "adria_core_carnet"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
                     attente = 5
@@ -297,6 +317,8 @@ class Core:
                             asyncio.create_task(self.repondre(e.get("data", {})))
                         elif e["event_type"] == "adria_core_ia":
                             asyncio.create_task(self.repondre_ia(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_carnet":
+                            asyncio.create_task(self.faire_carnet(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -304,15 +326,20 @@ class Core:
             await asyncio.sleep(attente)
             attente = min(attente * 2, 300)
 
-    async def planifier(self) -> None:
+    async def planifier(self, heure: str | None = None, tache=None) -> None:
+        heure = heure or self.heure_sync
+        tache = tache or self.synchroniser
         while True:
-            h, m = (int(x) for x in self.heure_sync.split(":"))
+            h, m = (int(x) for x in heure.split(":"))
             maintenant = datetime.now()
             prochaine = maintenant.replace(hour=h, minute=m, second=0, microsecond=0)
             if prochaine <= maintenant:
                 prochaine += timedelta(days=1)
             await asyncio.sleep((prochaine - maintenant).total_seconds())
-            await self.synchroniser()
+            try:
+                await tache()
+            except Exception:
+                LOG.exception("Tâche planifiée %s", heure)
 
     async def demarrer(self) -> None:
         async with aiohttp.ClientSession() as session:
@@ -320,7 +347,8 @@ class Core:
             await asyncio.sleep(10)  # laisser Home Assistant finir de démarrer
             await self.publier_etat_ia()
             await self.synchroniser()
-            await asyncio.gather(self.ecouter(), self.planifier())
+            await asyncio.gather(self.ecouter(), self.planifier(),
+                                 self.planifier(self.heure_carnet, self.faire_carnet))
 
 
 if __name__ == "__main__":

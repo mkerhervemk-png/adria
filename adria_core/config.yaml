@@ -1,5 +1,5 @@
 name: ADRIA Core
-version: "0.3.1"
+version: "0.4.0"
 slug: adria_core
 description: Mémoire longue d'ADRIA (sans IA) — garde l'historique des listes ADRIA et le rend cherchable.
 arch:
@@ -33,6 +33,7 @@ options:
     - input_boolean.mode_nuit
   ollama_url: http://76e18fb5-ollama:11434
   ollama_modele: llama3.2:3b
+  heure_carnet: "23:40"
 schema:
   heure_sync: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
   listes:
@@ -43,3 +44,4 @@ schema:
     - str?
   ollama_url: str?
   ollama_modele: str?
+  heure_carnet: str?
