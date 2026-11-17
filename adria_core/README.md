@@ -1,6 +1,11 @@
-# ADRIA Core (v0.3.0)
+# ADRIA Core (v0.3.1)
 
 Mémoire longue d'ADRIA, sans IA.
+
+Nouveau en 0.3.1 — recherche par période (agent Mémoire, lot M1) :
+- une question qui nomme une période (« en octobre », « la semaine dernière », « le week-end dernier », « mardi dernier », « hier », « le 24/10 », « le 24 octobre ») rend les lignes datées de cette période : souvenirs et carnets de bord d'abord, puis journal, témoin, historique, observations ; triées par date ;
+- s'il reste un sujet dans la question (« en octobre, l'Inster »), les lignes de la période qui en parlent passent en premier ;
+- sans période : recherche par mots comme avant.
 
 Nouveau en 0.3.0 — routeur IA :
 - événement `adria_core_ia` {req_id, prompt, prompt_secours, profondeur (interactif|rapide|profond), task_name, force_gemini} → réponse `adria_core_ia_resultat` {req_id, ok, data, moteur, duree} ;

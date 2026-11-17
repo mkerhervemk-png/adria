@@ -17,7 +17,8 @@ MOTS_VIDES = {
     "leur", "elle", "ils", "nous", "vous", "sans", "chez", "entre", "aussi", "alors",
     "donc", "mon", "ton", "son", "mes", "tes", "ses", "moi", "toi", "aux", "ont",
     "ete", "dis", "donne", "sais", "sait", "avait", "avais", "avions", "deja",
-    "souviens", "rappelle", "rappelles", "hier", "jour", "fois",
+    "souviens", "rappelle", "rappelles", "hier", "jour", "fois", "raconte", "racontes",
+    "passe", "passee", "passes", "derniere", "dernier", "semaine", "mois",
 }
 
 
@@ -107,8 +108,61 @@ class Memoire:
         self.db.commit()
         return nouvelles
 
-    def chercher(self, question: str, n: int = 5, exclure_sources: list[str] | None = None) -> list[dict]:
+    # Ordre de priorité pour raconter une période : d'abord ce qui résume, ensuite le détail.
+    PRIORITE_PERIODE = [
+        "archive/souvenir", "adria_souvenirs", "archive/episode", "adria_jarvis_episodes",
+        "archive/journal_interieur", "adria_journal_interieur", "archive/journal",
+        "adria_journal", "archive/temoin", "archive/memoire_perso", "adria_memoire_perso",
+        "historique", "archive/observation", "adria_observations",
+    ]
+
+    def chercher_periode(self, debut: str, fin: str, mots: list[str], n: int,
+                         exclure: list[str]) -> list[dict]:
+        """Lignes datées entre debut et fin (AAAA-MM-JJ), filtrées par mots s'il y en a."""
+        filtre = ""
+        if exclure:
+            filtre = " AND l.source NOT IN (%s)" % ",".join("?" * len(exclure))
+        rang = " ".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(self.PRIORITE_PERIODE))
+        ordre = f" ORDER BY CASE l.source {rang} ELSE 99 END, l.date_evt, l.id LIMIT ?"
+        base = ("SELECT l.source, l.resume, l.detail, l.date_evt FROM lignes l"
+                " WHERE l.date_evt BETWEEN ? AND ?" + filtre)
+        params = [debut, fin, *exclure]
+        lignes = []
+        if mots:
+            requete = " OR ".join(f'"{m}"*' for m in mots)
+            lignes = self.db.execute(
+                base.replace("FROM lignes l", "FROM lignes_fts JOIN lignes l ON l.id = lignes_fts.rowid")
+                + " AND lignes_fts MATCH ?" + ordre, (*params, requete, n * 3)).fetchall()
+        if not lignes:  # pas de mot ou rien trouvé : toute la période, par priorité
+            lignes = self.db.execute(base + ordre, (*params, n * 3)).fetchall()
+        vus: set[str] = set()
+        res: list[dict] = []
+        for r in lignes:
+            cle = normaliser(r["resume"])[:120]
+            if cle in vus:
+                continue
+            vus.add(cle)
+            res.append({"source": r["source"], "date": r["date_evt"] or "",
+                        "texte": r["resume"], "detail": r["detail"]})
+            if len(res) >= n:
+                break
+        return sorted(res, key=lambda x: x["date"])
+
+    def chercher(self, question: str, n: int = 5, exclure_sources: list[str] | None = None,
+                 auj=None) -> list[dict]:
+        from periode import periode  # import local : periode importe normaliser d'ici
         mots = mots_cles(question)
+        per = periode(question, auj)
+        if per:
+            # mots de la période inutiles pour filtrer (octobre, semaine, dernier…)
+            mots = [m for m in mots if m not in ("janvi", "fevri", "mars", "avril", "mai", "juin",
+                    "juill", "aout", "septe", "octob", "novem", "decem", "semai", "derni",
+                    "passe", "week", "lundi", "mardi", "mercr", "jeudi", "vendr", "samed",
+                    "diman", "racon", "comme", "passe", "mois")]
+            res = self.chercher_periode(per[0].isoformat(), per[1].isoformat(), mots,
+                                        max(1, min(int(n), 20)), exclure_sources or [])
+            if res:
+                return res
         if not mots:
             return []
         requete = " OR ".join(f'"{m}"*' for m in mots)

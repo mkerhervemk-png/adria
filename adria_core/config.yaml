@@ -1,5 +1,5 @@
 name: ADRIA Core
-version: "0.3.0"
+version: "0.3.1"
 slug: adria_core
 description: Mémoire longue d'ADRIA (sans IA) — garde l'historique des listes ADRIA et le rend cherchable.
 arch:
