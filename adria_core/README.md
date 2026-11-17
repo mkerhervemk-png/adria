@@ -1,6 +1,12 @@
-# ADRIA Core (v0.1.0)
+# ADRIA Core (v0.2.0)
 
 Mémoire longue d'ADRIA, sans IA.
+
+Nouveau en 0.2.0 :
+- relit l'archive `/media/adria_memoire/*.md` (lignes « [AAAA-MM-JJ] [source] texte », sources `archive/...`) avec la vraie date de chaque ligne ;
+- garde l'historique Home Assistant des entités de l'option `historique` (motifs acceptés, ex. `light.*`) : 14 jours au premier lancement, puis chaque nuit depuis le dernier import (source `historique`), donc au-delà de la durée du recorder ;
+- une phrase présente à la fois dans une liste et dans l'archive n'est rendue qu'une fois ;
+- la date renvoyée est celle de l'événement quand elle est connue (sinon vide).
 
 - Recopie chaque nuit (03h30 par défaut) les listes ADRIA de Home Assistant dans une base SQLite. Rien n'est jamais effacé, même quand ADRIA purge ses listes après 48 h ou 7 jours.
 - Répond aux recherches par mots sur tout cet historique.
