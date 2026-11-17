@@ -53,14 +53,27 @@ class Memoire:
                 detail TEXT,
                 empreinte TEXT NOT NULL UNIQUE,
                 first_seen TEXT NOT NULL,
-                last_seen TEXT NOT NULL
+                last_seen TEXT NOT NULL,
+                date_evt TEXT
             );
+            CREATE TABLE IF NOT EXISTS meta (cle TEXT PRIMARY KEY, valeur TEXT);
             CREATE VIRTUAL TABLE IF NOT EXISTS lignes_fts USING fts5(
                 resume, detail, tokenize = 'unicode61 remove_diacritics 2'
             );
             """
         )
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(lignes)")]
+        if "date_evt" not in cols:  # base v0.1.0
+            self.db.execute("ALTER TABLE lignes ADD COLUMN date_evt TEXT")
         self.db.commit()
+
+    def meta(self, cle: str, valeur: str | None = None) -> str | None:
+        if valeur is not None:
+            self.db.execute("INSERT OR REPLACE INTO meta (cle, valeur) VALUES (?, ?)", (cle, valeur))
+            self.db.commit()
+            return valeur
+        r = self.db.execute("SELECT valeur FROM meta WHERE cle = ?", (cle,)).fetchone()
+        return r[0] if r else None
 
     def ajouter(self, source: str, items: list[dict], maintenant: datetime | None = None) -> int:
         """Ajoute les lignes nouvelles. Renvoie le nombre de lignes nouvelles."""
@@ -78,9 +91,9 @@ class Memoire:
             if cur.rowcount:
                 continue
             cur = self.db.execute(
-                "INSERT INTO lignes (source, uid, resume, detail, empreinte, first_seen, last_seen)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (source, it.get("uid"), resume, detail, empreinte, quand, quand),
+                "INSERT INTO lignes (source, uid, resume, detail, empreinte, first_seen, last_seen, date_evt)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (source, it.get("uid"), resume, detail, empreinte, quand, quand, it.get("date")),
             )
             self.db.execute(
                 "INSERT INTO lignes_fts (rowid, resume, detail) VALUES (?, ?, ?)",
@@ -100,21 +113,29 @@ class Memoire:
         if exclure:
             filtre = " AND l.source NOT IN (%s)" % ",".join("?" * len(exclure))
         lignes = self.db.execute(
-            "SELECT l.source, l.resume, l.detail, l.first_seen, bm25(lignes_fts) AS score"
+            "SELECT l.source, l.resume, l.detail, l.first_seen, l.date_evt, bm25(lignes_fts) AS score"
             " FROM lignes_fts JOIN lignes l ON l.id = lignes_fts.rowid"
             " WHERE lignes_fts MATCH ?" + filtre +
-            " ORDER BY score, l.first_seen DESC LIMIT ?",
-            (requete, *exclure, max(1, min(int(n), 20))),
+            " ORDER BY score, COALESCE(l.date_evt, l.first_seen) DESC LIMIT ?",
+            (requete, *exclure, max(1, min(int(n), 20)) * 3),
         ).fetchall()
-        return [
-            {
+        # la même phrase peut venir d'une liste ET de l'archive : une seule fois
+        vus: set[str] = set()
+        res: list[dict] = []
+        for r in lignes:
+            cle = normaliser(r["resume"])[:120]
+            if cle in vus:
+                continue
+            vus.add(cle)
+            res.append({
                 "source": r["source"],
-                "date": r["first_seen"][:10],
+                "date": r["date_evt"] or "",
                 "texte": r["resume"],
                 "detail": r["detail"],
-            }
-            for r in lignes
-        ]
+            })
+            if len(res) >= max(1, min(int(n), 20)):
+                break
+        return res
 
     def stats(self) -> dict:
         total = self.db.execute("SELECT COUNT(*) FROM lignes").fetchone()[0]
@@ -122,5 +143,47 @@ class Memoire:
             r[0]: r[1]
             for r in self.db.execute("SELECT source, COUNT(*) FROM lignes GROUP BY source")
         }
-        plus_ancienne = self.db.execute("SELECT MIN(first_seen) FROM lignes").fetchone()[0]
+        plus_ancienne = self.db.execute(
+            "SELECT MIN(COALESCE(date_evt, first_seen)) FROM lignes").fetchone()[0]
         return {"lignes": total, "par_source": par_source, "depuis": plus_ancienne}
+
+
+LIGNE_ARCHIVE = re.compile(r"^\[(\d{4}-\d{2}-\d{2})\] \[([^\]]+)\] (.+)$")
+
+
+def lire_archive(texte: str) -> list[dict]:
+    """Lignes « [AAAA-MM-JJ] [source] texte » de l'archive /media/adria_memoire."""
+    items = []
+    for ligne in texte.splitlines():
+        m = LIGNE_ARCHIVE.match(ligne.strip())
+        if m:
+            items.append({"date": m.group(1), "src": m.group(2), "summary": m.group(3)})
+    return items
+
+
+ETATS = {
+    "on": "allumé", "off": "éteint", "home": "à la maison", "not_home": "absent",
+    "playing": "en lecture", "paused": "en pause", "idle": "inactif", "standby": "en veille",
+}
+
+
+def lignes_historique(historique: list[list[dict]], noms: dict[str, str], fuseau=None) -> list[dict]:
+    """Transforme la réponse /api/history/period en lignes datées (heure locale)."""
+    items = []
+    for serie in historique:
+        precedent = None
+        eid = serie[0].get("entity_id") if serie else None
+        for etat in serie:
+            eid = etat.get("entity_id") or eid
+            s = etat.get("state")
+            if s in (None, "unknown", "unavailable") or s == precedent:
+                continue
+            precedent = s
+            quand = datetime.fromisoformat(etat["last_changed"]).astimezone(fuseau)
+            nom = noms.get(eid, eid)
+            items.append({
+                "date": quand.strftime("%Y-%m-%d"),
+                "summary": f"{quand.strftime('%d/%m %H:%M')} {nom} : {ETATS.get(s, s)}",
+                "description": eid,
+            })
+    return items
