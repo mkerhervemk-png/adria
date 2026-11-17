@@ -112,10 +112,15 @@ class Routeur:
         return await self.ha.ai_task(ENTITES[moteur], prompt, f"{tache}_{moteur}")
 
     async def demander(self, prompt: str, profondeur: str = "rapide", tache: str = "adria",
-                       prompt_secours: str = "", force_gemini: bool = False) -> dict:
+                       prompt_secours: str = "", force_gemini: bool = False,
+                       seulement: str = "") -> dict:
         prof = profondeur if profondeur in CHAINES else "rapide"
+        chaine = CHAINES[prof]
+        if seulement:  # mode test : un seul moteur, délai le plus long prévu pour lui
+            delais = [d for m, d in sum(CHAINES.values(), []) if m == seulement]
+            chaine = [(seulement, max(delais))] if delais else []
         essais = []
-        for moteur, delai in CHAINES[prof]:
+        for moteur, delai in chaine:
             if moteur == "pause":  # nouvel essai Gemini seulement s'il a vraiment été appelé
                 if essais and essais[-1][0] == "gemini" and essais[-1][2]:
                     await asyncio.sleep(delai)

@@ -126,3 +126,9 @@ def test_stats_ia():
     m.noter_ia("ollama", "rapide", True, 30.0, None, quand=10)
     s = m.stats_ia(500, maintenant=1100)
     assert s == {"gemini": {"appels": 2, "ok": 1, "moy_s": 2.0}}
+
+
+def test_mode_test_un_seul_moteur():
+    ha = FauxHA({"gemini": "G", "ollama": "Réponse locale"})
+    r = lancer(Routeur(ha).demander("Q", "interactif", seulement="ollama"))
+    assert r["moteur"] == "ollama" and [a[0] for a in ha.appels] == ["ollama"]

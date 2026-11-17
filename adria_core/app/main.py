@@ -30,7 +30,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 
 def lire_options() -> dict:
@@ -145,6 +145,7 @@ class Core:
                 str(data.get("task_name") or "adria"),
                 str(data.get("prompt_secours") or ""),
                 str(data.get("force_gemini")).lower() == "true",
+                str(data.get("seulement") or ""),
             )
         except Exception as e:
             LOG.exception("Routeur IA")
@@ -166,11 +167,18 @@ class Core:
                     "moteurs_24h": self.memoire.stats_ia(86400),
                     "moteurs_7j": self.memoire.stats_ia(7 * 86400),
                     "coupe_circuit": self.routeur.cc.etat(),
+                    "battement": datetime.now().isoformat(timespec="seconds"),
                     "version": VERSION,
                 },
             })
         except Exception as e:
             LOG.warning("Etat IA non publié : %s", e)
+
+    async def battement(self) -> None:
+        """Signal de vie : sensor.adria_core_ia mis à jour chaque minute (lu par HA)."""
+        while True:
+            await self.publier_etat_ia()
+            await asyncio.sleep(60)
 
     async def synchroniser(self) -> None:
         nouvelles = 0
@@ -347,7 +355,7 @@ class Core:
             await asyncio.sleep(10)  # laisser Home Assistant finir de démarrer
             await self.publier_etat_ia()
             await self.synchroniser()
-            await asyncio.gather(self.ecouter(), self.planifier(),
+            await asyncio.gather(self.ecouter(), self.battement(), self.planifier(),
                                  self.planifier(self.heure_carnet, self.faire_carnet))
 
 

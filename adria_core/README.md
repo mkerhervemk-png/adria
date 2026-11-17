@@ -1,8 +1,10 @@
-# ADRIA Core (v0.4.0)
+# ADRIA Core (v0.4.1)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
 Mémoire longue d'ADRIA, sans IA.
+
+Nouveau en 0.4.1 — filet de sécurité : signal de vie (attribut `battement` de `sensor.adria_core_ia`, chaque minute ; HA saute le Core s'il a plus de 3 min) ; mode test `seulement: <moteur>` dans `adria_core_ia`.
 
 Nouveau en 0.4.0 — agent Mémoire (lot M2a) :
 - carnet de bord du soir + réflexion d'ADRIA faits par le Core à 23h40 (option `heure_carnet`) si `input_boolean.adria_core_memoire` est ON (et `adria_jarvis_actif` ON) : même prompt et même sortie que l'automatisation HA « Jarvis P4 », avec en plus PRESENCES_REELLES tirées de l'historique du Core ; un seul appel IA via le routeur du Core ;
