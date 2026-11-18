@@ -231,7 +231,8 @@ class AgentGeneral:
             res["texte"] = orale + (" Je t'ai envoyé la proposition sur ton téléphone." if p == "mael"
                                     else " J'ai envoyé la proposition sur le téléphone de Mael.")
             res["proposition"] = libelle_proposition(prop)
-        if detail and len(detail) > len(orale) + 40 and not enfant:
+        res["detail_envoye"] = bool(detail and len(detail) > len(orale) + 40 and not enfant)
+        if res["detail_envoye"]:
             await self.notifier_tel(f"🧠 ADRIA — {nettoyer(q, 60)}", detail
                                     + (f"\n[{res['sources']}]" if res.get("sources") else ""))
         self.dernier = {"quand": m.isoformat(timespec="seconds"), "qui": p, "moteur": rep.get("moteur"),
@@ -239,8 +240,13 @@ class AgentGeneral:
         return res
 
     async def secours(self, data: dict) -> None:
-        """Réponse « je ne sais pas » d'ADRIA : le Core cherche plus loin et répond lui-même."""
+        """Réponse en arrière-plan : « je ne sais pas » d'ADRIA (le Core cherche plus loin) ou demande
+        faite au téléphone (mode=telephone : ADRIA n'est pas bloquée, la réponse arrive en notification)."""
         res = await self.repondre(data)
+        if str(data.get("mode")) == "telephone":
+            if not res.get("ok") or not res.get("detail_envoye"):
+                await self.notifier_tel("🧠 ADRIA — " + nettoyer(data.get("question"), 60), res.get("texte") or "")
+            return
         if not res.get("ok"):
             return
         await asyncio.sleep(SECOURS_ATTENTE)  # laisser ADRIA finir de dire « je ne sais pas »

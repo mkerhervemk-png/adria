@@ -262,3 +262,13 @@ def test_general_voix_chaine_interactive_et_secours(tmp_path, monkeypatch):
     assert core.prof == ["interactif"]
     dit = [d for c, d in core.appels if c == "/services/script/adria_dire"]
     assert dit and dit[0]["message"].startswith("J'ai cherché plus loin. Paris")
+
+
+def test_general_telephone_en_arriere_plan(tmp_path):
+    core = _core_general(tmp_path, [json.dumps({"reponse_orale": "Voici ta lettre courte."}), None])
+    ag = G.AgentGeneral(core, "notify.mobile_app_x")
+    asyncio.run(ag.secours({"question": "rédige une lettre", "qui": "mael", "mode": "telephone"}))
+    n = notifs(core)
+    assert len(n) == 1 and n[0]["message"] == "Voici ta lettre courte."
+    asyncio.run(ag.secours({"question": "x", "qui": "mael", "mode": "telephone"}))  # IA en panne
+    assert "n'arrive pas" in notifs(core)[-1]["message"]
