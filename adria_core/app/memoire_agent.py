@@ -45,9 +45,11 @@ def construire_prompt(jour: date, d: dict) -> str:
         f"METEO : {d.get('meteo')}. "
         "LIGNE 2 commence par REFLEXION: puis ta reflexion du soir d ADRIA, a la premiere personne, "
         "230 caracteres maximum, au format exact : Reussi : ... | A ameliorer : ... | Demain je : ... . "
-        "Demain je = UNE action concrete et verifiable tiree des donnees (interdit : formules generales "
-        "comme rester attentive, optimiser le confort, accompagner la famille), differente de "
-        "REFLEXION_D_HIER. Une difficulte se dit comme un defi, jamais une plainte. Pas de sante, pas "
+        "Demain je = UNE chose concrete et verifiable que je ferai moi-meme dans mes analyses, tiree "
+        "des donnees (verifier, comparer ou surveiller une donnee precise), differente de "
+        "REFLEXION_D_HIER ; jamais une promesse de notification, de rappel, de message ou d action sur "
+        "un appareil, car je n en declenche pas seule (interdit aussi : formules generales comme rester "
+        "attentive, optimiser le confort, accompagner la famille). Une difficulte se dit comme un defi, jamais une plainte. Pas de sante, pas "
         f"de securite. QUESTIONS_SANS_REPONSE_AUJOURD_HUI : {d.get('lacunes') or 'aucune'}. "
         f"ECHECS_VOCAUX_SEMAINE : {d.get('echecs')}. SANTE_IA : {d.get('sante')}/100. "
         f"TAUX_ACCEPTATION_PROPOSITIONS : {d.get('taux')} %. HUMEUR : {d.get('humeur')}. "
@@ -65,6 +67,18 @@ def lire_reponse(texte: str) -> tuple[str, str]:
     carnet = re.sub(r"(?i)^carnet\s*:\s*", "", carnet).strip()
     reflexion = re.sub(r"(?i)^r.flexion\s*:\s*", "", reflexion).strip()
     return carnet, reflexion
+
+
+def couper(texte: str, maxi: int = 230) -> str:
+    """Coupe proprement : à la dernière phrase complète, sinon au dernier mot (avec …)."""
+    texte = (texte or "").strip()
+    if len(texte) <= maxi:
+        return texte
+    debut = texte[:maxi]
+    fin = max(debut.rfind(". "), debut.rfind(" ; "), debut.rfind(" | "))
+    if fin >= maxi // 2:
+        return debut[:fin + 1].rstrip(" ;|")
+    return debut[:maxi - 1].rsplit(" ", 1)[0].rstrip(" ,;(") + "…"
 
 
 def items(rep: dict, liste: str) -> list[dict]:
@@ -130,6 +144,7 @@ class AgentMemoire:
         d = await self.donnees(jour)
         rep = await self.core.routeur.demander(construire_prompt(jour, d), "rapide", "adria_core_carnet")
         carnet, reflexion = lire_reponse(rep.get("data", "")) if rep.get("ok") else ("", "")
+        carnet, reflexion = couper(carnet), couper(reflexion)
         jour_txt = f"{JOURS[jour.weekday()]} {jour.strftime('%d/%m/%Y')}"
         jour_court = f"{JOURS[jour.weekday()]} {jour.strftime('%d/%m')}"
         res = {"ok": len(carnet) > 10, "carnet": carnet[:230], "reflexion": reflexion[:230],

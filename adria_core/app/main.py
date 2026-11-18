@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from memoire_agent import AgentMemoire
+from purge import LISTES as LISTES_PURGE, a_purger
 from routeur import Routeur
 from store import Memoire, lignes_historique, lire_archive
 
@@ -30,7 +31,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 
 
 def lire_options() -> dict:
@@ -70,6 +71,7 @@ class Core:
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
         self.derniere_erreur: str | None = None
+        self.derniere_purge: dict | None = None
         self.session: aiohttp.ClientSession | None = None
 
     @property
@@ -206,6 +208,48 @@ class Core:
         LOG.info("Synchronisation : %s lignes nouvelles, %s erreurs", nouvelles, len(erreurs))
         await self.publier_etat()
 
+    async def nuit(self) -> None:
+        """03h30 : recopie d'abord, puis purge des listes HA si l'interrupteur est ON."""
+        await self.synchroniser()
+        if await self.etat("input_boolean.adria_core_purge") == "on":
+            await self.purger()
+
+    async def purger(self, data: dict | None = None) -> dict:
+        """Lot M2b-1. Retire des listes HA seulement les lignes dont le Core a la copie.
+        essai=True : compte sans rien retirer."""
+        essai = str((data or {}).get("essai")).lower() == "true"
+        maintenant = datetime.now()
+        res: dict = {"quand": maintenant.isoformat(timespec="seconds"), "essai": essai,
+                     "retirees": {}, "gardees_sans_copie": {}, "erreurs": []}
+        for liste in LISTES_PURGE:
+            source = liste.removeprefix("todo.")
+            try:
+                rep = await self.appel("POST", "/services/todo/get_items?return_response",
+                                       {"entity_id": liste})
+                items = rep.get("service_response", {}).get(liste, {}).get("items", [])
+                self.memoire.ajouter(source, items)  # recopie juste avant : rien ne se perd
+                choix = a_purger(liste, items, maintenant)
+                ok = [i for i in choix if i.get("uid") and self.memoire.a_la_copie(source, i)]
+                sans = len(choix) - len(ok)
+                if ok and not essai:
+                    for k in range(0, len(ok), 50):
+                        await self.appel("POST", "/services/todo/remove_item", {
+                            "entity_id": liste, "item": [i["uid"] for i in ok[k:k + 50]]})
+                if ok:
+                    res["retirees"][source] = len(ok)
+                if sans:
+                    res["gardees_sans_copie"][source] = sans
+            except Exception as e:
+                res["erreurs"].append(f"{source}: {str(e)[:120]}")
+        LOG.info("Purge (%s) : %s", "essai" if essai else "réelle", res)
+        self.derniere_purge = res
+        try:
+            await self.appel("POST", "/events/adria_core_purge_resultat", res)
+        except Exception:
+            pass
+        await self.publier_etat()
+        return res
+
     def importer_archive(self) -> int:
         """Relit l'archive /media/adria_memoire (*.md) ; les doublons sont ignorés."""
         par_source: dict[str, list[dict]] = {}
@@ -260,6 +304,7 @@ class Core:
                     "derniere_sync": self.derniere_sync,
                     "derniere_erreur": self.derniere_erreur,
                     "dernier_carnet": self.agent_memoire.dernier or None,
+                    "derniere_purge": self.derniere_purge,
                     "version": VERSION,
                 },
             })
@@ -310,7 +355,8 @@ class Core:
                     if rep.get("type") != "auth_ok":
                         raise RuntimeError(f"auth refusée : {rep}")
                     for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser",
-                                             "adria_core_ia", "adria_core_carnet"), 1):
+                                             "adria_core_ia", "adria_core_carnet",
+                                             "adria_core_purge"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
                     attente = 5
@@ -327,6 +373,8 @@ class Core:
                             asyncio.create_task(self.repondre_ia(e.get("data", {})))
                         elif e["event_type"] == "adria_core_carnet":
                             asyncio.create_task(self.faire_carnet(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_purge":
+                            asyncio.create_task(self.purger(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -336,7 +384,7 @@ class Core:
 
     async def planifier(self, heure: str | None = None, tache=None) -> None:
         heure = heure or self.heure_sync
-        tache = tache or self.synchroniser
+        tache = tache or self.nuit
         while True:
             h, m = (int(x) for x in heure.split(":"))
             maintenant = datetime.now()

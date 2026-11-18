@@ -110,6 +110,15 @@ class Memoire:
         self.db.commit()
         return nouvelles
 
+    def a_la_copie(self, source: str, item: dict) -> bool:
+        """Vrai si la ligne (même texte, même description) est déjà dans la base du Core."""
+        resume = (item.get("summary") or "").strip()
+        if not resume:
+            return False
+        detail = (item.get("description") or "").strip()
+        empreinte = hashlib.sha1(f"{source}\x1f{resume}\x1f{detail}".encode()).hexdigest()
+        return self.db.execute("SELECT 1 FROM lignes WHERE empreinte = ?", (empreinte,)).fetchone() is not None
+
     # Ordre de priorité pour raconter une période : d'abord ce qui résume, ensuite le détail.
     PRIORITE_PERIODE = [
         "archive/souvenir", "adria_souvenirs", "archive/episode", "adria_jarvis_episodes",
