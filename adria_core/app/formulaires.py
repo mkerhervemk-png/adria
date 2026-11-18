@@ -31,7 +31,8 @@ PAGE_UI = "/hassio/ingress/0daf054b_adria_core"  # page « ADRIA Formulaires » 
 MAX_PAGES = 4
 ATTENTE_REPONSE = 15 * 60  # s par question
 CLES_PROFIL = ("nom", "prenom", "naissance", "lieu_naissance", "adresse", "code_postal",
-               "ville", "telephone", "email")
+               "ville", "telephone", "email", "etablissement")
+PREFIXE_POUR = re.compile(r"^@([^@/]{1,30})@(.+)$")  # « @Aelia@fiche.pdf » = formulaire pour Aelia
 LEADER = re.compile(r"^[.…_\-]{3,}$")
 
 PROMPT = (
@@ -39,7 +40,8 @@ PROMPT = (
     "que la personne doit remplir. Reponds UNIQUEMENT par un JSON : "
     '{"titre": "nom court du document", "champs": [ {"libelle": "texte du champ", '
     '"type": "texte|oui_non|case|signature", "cle": "nom|prenom|nom_prenom|naissance|'
-    'lieu_naissance|adresse|code_postal|ville|telephone|email|date_jour|lieu_signature|autre", '
+    'lieu_naissance|adresse|code_postal|ville|telephone|email|etablissement|date_jour|lieu_signature|autre", '
+    '"role": "personne|responsable1|responsable2", '
     '"question": "question courte et claire a poser a la personne", "deja_rempli": false, '
     '"zone": [ymin, xmin, ymax, xmax], "zone_oui": [ymin, xmin, ymax, xmax], '
     '"zone_non": [ymin, xmin, ymax, xmax]} ]}. '
@@ -49,8 +51,14 @@ PROMPT = (
     "(les cases de la ligne de la question). type case = une case a cocher seule. "
     "deja_rempli = true si le champ contient deja une reponse. Fait le / Date = cle date_jour ; "
     "A (ville de signature) = lieu_signature ; nom et prenom dans un seul champ = nom_prenom. "
+    "role = a qui le champ se rapporte : personne = la personne concernee par le document (eleve, "
+    "enfant, adherent, patient, licencie ou le signataire s il n y a qu une personne) ; responsable1 / "
+    "responsable2 = le 1er / 2e parent ou representant legal (pere, mere, tuteur, responsable). "
+    "etablissement = ecole, college, lycee ou club de la personne. "
     "N oublie aucun champ, n invente aucun champ, ignore les zones reservees a l administration."
 )
+ROLES = ("personne", "responsable1", "responsable2")
+CLES_COMMUNES = ("adresse", "code_postal", "ville", "telephone", "email")
 
 
 # --------------------------------------------------------------------- outils purs (testés)
@@ -182,12 +190,53 @@ def centre_case(boite, mots: list[dict], entete: str | None = None):
     return cx, cy
 
 
+def personnes_foyer(profil: dict, foyer: list | None) -> list[dict]:
+    """Mael (profil de l'appli, responsable) puis les membres du foyer (option formulaire_foyer)."""
+    out = [{**{k: str((profil or {}).get(k) or "").strip() for k in CLES_PROFIL}, "responsable": True}]
+    out[0]["prenom"] = out[0]["prenom"] or "Mael"
+    vus = {out[0]["prenom"].lower()}
+    for m in foyer or []:
+        if not isinstance(m, dict) or not str(m.get("prenom") or "").strip():
+            continue
+        p = {k: str(m.get(k) or "").strip() for k in CLES_PROFIL}
+        if p["prenom"].lower() in vus:
+            continue
+        vus.add(p["prenom"].lower())
+        p["responsable"] = bool(m.get("responsable"))
+        out.append(p)
+    return out
+
+
+def profils_roles(personnes: list[dict], prenom: str | None) -> dict:
+    """{'personne', 'responsable1', 'responsable2'} -> profil ou None."""
+    cible = next((p for p in personnes if prenom and p["prenom"].lower() == prenom.lower()), personnes[0])
+    resp = [p for p in personnes if p.get("responsable")]
+    return {"personne": cible, "responsable1": resp[0] if resp else None,
+            "responsable2": resp[1] if len(resp) > 1 else None}
+
+
+def valeur_role(cle: str, role: str, roles: dict, commun: dict, jour: date) -> str | None:
+    """Valeur d'un champ selon son rôle. Adresse du foyer pour tous ; téléphone/email du foyer
+    seulement pour un responsable ou un adulte (jamais inventés pour un enfant)."""
+    if cle in ("date_jour", "lieu_signature"):
+        return valeur_profil(cle, commun, jour)
+    p = roles.get(role if role in ROLES else "personne")
+    if not p:
+        return None
+    v = valeur_profil(cle, p, jour)
+    if v is None and cle in CLES_COMMUNES:
+        if cle in ("telephone", "email") and not p.get("responsable"):
+            return None
+        v = valeur_profil(cle, commun, jour)
+    return v
+
+
 def valeur_profil(cle: str, profil: dict, jour: date) -> str | None:
     p = {k: str(profil.get(k) or "").strip() for k in CLES_PROFIL}
     if cle == "date_jour":
         return jour.strftime("%d/%m/%Y")
-    if cle == "nom_prenom":
-        return " ".join(v for v in (p["nom"].upper(), p["prenom"]) if v) or None
+    if cle == "nom_prenom":  # les deux, sinon on demande (jamais un prénom seul)
+        return f"{p['nom'].upper()} {p['prenom']}" if p["nom"] and p["prenom"] else None
     if cle == "nom":
         return p["nom"].upper() or None
     if cle == "lieu_signature":
@@ -205,7 +254,9 @@ def normaliser(champs_bruts: list, page: int, mots: list[dict], largeur: float, 
         typ = str(c.get("type") or "texte").lower()
         if typ == "signature":
             continue
+        role = str(c.get("role") or "personne").lower()
         champ = {"page": page, "type": typ, "cle": str(c.get("cle") or "autre").lower(),
+                 "role": role if role in ROLES else "personne",
                  "libelle": str(c.get("libelle") or "").strip()[:120],
                  "question": str(c.get("question") or c.get("libelle") or "").strip()[:200]}
         if typ == "oui_non":
@@ -289,9 +340,11 @@ class AgentFormulaires:
     """`ha` = le Core : etat(), appel(), ai_task_vision(), incrementer()."""
 
     def __init__(self, ha, profil: dict | None = None,
-                 notifier: str = "notify.mobile_app_telephone_mael_sm_s921b") -> None:
+                 notifier: str = "notify.mobile_app_telephone_mael_sm_s921b",
+                 foyer: list | None = None) -> None:
         self.ha = ha
         self.profil = profil or {}
+        self.personnes = personnes_foyer(self.profil, foyer)
         self.notifier = notifier
         self.en_cours: str | None = None
         self.attentes: dict[str, asyncio.Future] = {}
@@ -378,19 +431,25 @@ class AgentFormulaires:
         os.makedirs(os.path.join(DOSSIER, "sortie"), exist_ok=True)
         pdf = os.path.join(travail, "source.pdf")
         shutil.copyfile(chemin, pdf)
-        res = {"fichier": os.path.basename(chemin), "debut": maintenant.isoformat(timespec="seconds"),
-               "ok": False}
-        self.en_cours = res["fichier"]
+        m = PREFIXE_POUR.match(os.path.basename(chemin))
+        pour, nom_doc = (m.group(1), m.group(2)) if m else (None, os.path.basename(chemin))
+        roles = profils_roles(self.personnes, pour)
+        res = {"fichier": nom_doc, "pour": roles["personne"]["prenom"],
+               "debut": maintenant.isoformat(timespec="seconds"), "ok": False}
+        self.en_cours = res["fichier"] + (f" (pour {res['pour']})" if pour else "")
         try:
             titre, champs = await self.detecter(travail, pdf, ident)
             res["champs"] = len(champs)
             if not champs:
                 raise RuntimeError("aucun champ reconnu")
+            if pour:
+                titre = f"{titre} — {res['pour']}"[:60]
             for c in champs:
-                c["valeur"] = valeur_profil(c["cle"], self.profil, maintenant.date()) if c["type"] == "texte" else None
+                c["valeur"] = (valeur_role(c["cle"], c.get("role", "personne"), roles, self.personnes[0],
+                                           maintenant.date()) if c["type"] == "texte" else None)
             res["auto"] = sum(1 for c in champs if c.get("valeur"))
             res["questions"] = await self.poser_questions(titre, [c for c in champs if not c.get("valeur")])
-            sortie = nom_sortie(chemin, maintenant)
+            sortie = nom_sortie((f"{res['pour']}_" if pour else "") + nom_doc, maintenant)
             pdf_sortie = os.path.join(DOSSIER, "sortie", sortie + ".pdf")
             res["ecrits"] = dessiner(pdf, pdf_sortie, champs)
             subprocess.run(["pdftoppm", "-r", "80", "-png", "-singlefile", "-f", "1", "-l", "1",

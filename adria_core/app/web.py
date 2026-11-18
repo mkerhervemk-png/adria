@@ -101,11 +101,15 @@ class PageFormulaires:
             elif c:
                 etat += (f"<p class=gris>Dernier courrier : {c.get('echeances', 0)} échéance(s) trouvée(s), "
                          f"{c.get('ajoutees', 0)} ajoutée(s) à l'agenda.</p>")
+        pour = "".join(f"<option value='{i}'>{html.escape(pp['prenom'])}</option>"
+                       for i, pp in enumerate(self.agent.personnes))
+        pour = (f"<p>Pour qui ? <select name=pour>{pour}</select> "
+                "<span class=gris>(formulaire)</span></p>") if len(self.agent.personnes) > 1 else ""
         modes = ("<p><label><input type=radio name=mode value=formulaire checked> 📝 Formulaire à remplir (PDF)</label><br>"
                  "<label><input type=radio name=mode value=courrier> 📬 Courrier reçu (PDF ou photo) : "
                  "échéances vers l'agenda</label></p>") if self.courriers else ""
         envoi = ("<div class=carte><form method=post action=envoyer enctype=multipart/form-data>"
-                 f"{modes}<input type=file name=pdf accept='application/pdf,.pdf,image/*' required>"
+                 f"{modes}{pour}<input type=file name=pdf accept='application/pdf,.pdf,image/*' required>"
                  "<button>Envoyer à ADRIA</button></form>"
                  "<p class=gris>Formulaire : ADRIA remplit ce qu'elle sait et te pose le reste. "
                  "Courrier : ADRIA le résume et te propose ses dates limites ; rien n'entre dans "
@@ -126,10 +130,13 @@ class PageFormulaires:
 
     async def envoyer(self, request) -> web.Response:
         lecteur = await request.multipart()
-        mode, donnees, nom_recu = "formulaire", None, ""
+        mode, donnees, nom_recu, pour = "formulaire", None, "", 0
         while (champ := await lecteur.next()) is not None:
             if champ.name == "mode":
                 mode = (await champ.text()).strip()
+            elif champ.name == "pour":
+                t = (await champ.text()).strip()
+                pour = int(t) if t.isdigit() else 0
             elif champ.name == "pdf" and champ.filename:
                 nom_recu = champ.filename
                 donnees = await champ.read(decode=False)
@@ -145,11 +152,17 @@ class PageFormulaires:
                 return await self.accueil(request, "<p class=ko>Ce fichier n'est pas un PDF.</p>")
             entree = os.path.join(F.DOSSIER, "entree")
         os.makedirs(entree, exist_ok=True)
-        nom = nom_propre(nom_recu, ext)
+        base, pris = nom_propre(nom_recu, ext), set(os.listdir(entree))
+        pris |= {F.PREFIXE_POUR.match(f).group(2) for f in pris if F.PREFIXE_POUR.match(f)}
+        nom = base
+        for i in range(1, 100):  # jamais d'écrasement
+            if nom not in pris:
+                break
+            nom = datetime.now().strftime("%H%M%S_") + (f"{i}_" if i > 1 else "") + base
+        if mode != "courrier" and 0 < pour < len(self.agent.personnes):
+            prenom = re.sub(r"[^\w\-]+", "_", self.agent.personnes[pour]["prenom"])[:30]
+            nom = f"@{prenom}@{nom}"
         chemin = os.path.join(entree, nom)
-        if os.path.exists(chemin):
-            nom = datetime.now().strftime("%H%M%S_") + nom
-            chemin = os.path.join(entree, nom)
         with open(chemin, "wb") as fh:
             fh.write(donnees)
         msg = (f"<p class=ok>✅ {html.escape(nom)} reçu. ADRIA commence dans moins d'une minute : "

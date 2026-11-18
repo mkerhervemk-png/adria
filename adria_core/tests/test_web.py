@@ -89,3 +89,33 @@ def test_envoi_courrier_photo(tmp_path, monkeypatch):
     asyncio.run(scenario())
     assert (tmp_path / "courriers" / "entree" / "IMG_2026.jpg").exists()
     assert not (tmp_path / "entree").exists() or not list((tmp_path / "entree").glob("*.jpg"))
+
+
+def test_envoi_pour_un_membre_du_foyer(tmp_path, monkeypatch):
+    monkeypatch.setattr(F, "DOSSIER", str(tmp_path))
+    ha = FauxHA()
+    form = F.AgentFormulaires(ha, {"prenom": "Mael"}, foyer=[{"prenom": "Aelia"}])
+    page = W.PageFormulaires(form, ha)
+
+    async def scenario():
+        runner = web.AppRunner(page.application())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        base = f"http://127.0.0.1:{port}/"
+        async with aiohttp.ClientSession() as s:
+            assert "Pour qui" in await (await s.get(base)).text()
+            for pour in ("1", "1", "0", "99"):
+                fd = aiohttp.FormData()
+                fd.add_field("pour", pour)
+                fd.add_field("pdf", open(PDF, "rb"), filename="fiche.pdf", content_type="application/pdf")
+                assert "ADRIA commence" in await (await s.post(base + "envoyer", data=fd)).text()
+        await runner.cleanup()
+
+    asyncio.run(scenario())
+    noms = sorted(os.listdir(tmp_path / "entree"))
+    assert "@Aelia@fiche.pdf" in noms
+    assert any(n.startswith("@Aelia@") and n != "@Aelia@fiche.pdf" for n in noms)  # pas d'écrasement
+    assert sum(1 for n in noms if not n.startswith("@")) == 2  # 0 et 99 -> Mael
+    assert all(F.PREFIXE_POUR.match(n) or not n.startswith("@") for n in noms)

@@ -133,3 +133,70 @@ def test_echec_range_sans_reboucler(tmp_path, monkeypatch):
 
     res = asyncio.run(F.AgentFormulaires(FauxHA()).traiter(str(src)))
     assert not res["ok"] and not src.exists() and (tmp_path / "entree" / "echecs").exists()
+
+
+FOYER = [{"prenom": "Vanessa", "nom": "Martin", "telephone": "06 00 00 00 01", "responsable": True},
+         {"prenom": "Aelia", "nom": "Kerherve", "naissance": "01/02/2020", "etablissement": "École Saint-Michel"},
+         {"prenom": "Ryan"}, {"prenom": ""}, {"prenom": "mael"}]
+MAEL = {"nom": "Kerherve", "prenom": "Mael", "adresse": "1 rue X", "code_postal": "22000",
+        "ville": "Saint-Brieuc", "telephone": "06 11 11 11 11"}
+
+
+def test_personnes_foyer_et_roles():
+    from datetime import date
+    gens = F.personnes_foyer(MAEL, FOYER)
+    assert [p["prenom"] for p in gens] == ["Mael", "Vanessa", "Aelia", "Ryan"]  # vide et doublon ignorés
+    r = F.profils_roles(gens, "aelia")
+    assert r["personne"]["prenom"] == "Aelia"
+    assert r["responsable1"]["prenom"] == "Mael" and r["responsable2"]["prenom"] == "Vanessa"
+    j = date(2026, 11, 18)
+    v = lambda cle, role: F.valeur_role(cle, role, r, gens[0], j)  # noqa: E731
+    assert v("nom_prenom", "personne") == "KERHERVE Aelia"
+    assert v("naissance", "personne") == "01/02/2020"
+    assert v("etablissement", "personne") == "École Saint-Michel"
+    assert v("adresse", "personne") == "1 rue X"            # adresse du foyer
+    assert v("telephone", "personne") is None                # jamais le tél des parents pour l'enfant
+    assert v("telephone", "responsable1") == "06 11 11 11 11"
+    assert v("telephone", "responsable2") == "06 00 00 00 01"
+    assert v("nom", "responsable2") == "MARTIN"
+    assert v("lieu_signature", "responsable2") == "Saint-Brieuc"
+    assert v("date_jour", "personne") == "18/11/2026"
+    # Ryan sans nom : on demande plutôt qu'écrire « Ryan » seul
+    assert F.valeur_role("nom_prenom", "personne", F.profils_roles(gens, "Ryan"), gens[0], j) is None
+    # personne inconnue -> Mael
+    assert F.profils_roles(gens, None)["personne"]["prenom"] == "Mael"
+    assert F.profils_roles(F.personnes_foyer(MAEL, []), None)["responsable2"] is None
+
+
+def test_formulaire_pour_un_enfant(tmp_path, monkeypatch):
+    monkeypatch.setattr(F, "DOSSIER", str(tmp_path))
+    monkeypatch.setattr(F, "ATTENTE_REPONSE", 0.05)
+    (tmp_path / "entree").mkdir()
+    src = tmp_path / "entree" / "@Aelia@fiche ecole.pdf"
+    src.write_bytes(open(PDF, "rb").read())
+    gem = {"titre": "Fiche", "champs": [
+        {"libelle": "Nom et prénom", "type": "texte", "cle": "nom_prenom", "role": "personne",
+         "question": "Nom ?", "zone": [775, 360, 795, 600]},
+        {"libelle": "Fait le", "type": "texte", "cle": "date_jour", "question": "Date ?",
+         "zone": [793, 115, 810, 230]}]}
+
+    class FauxHA:
+        def __init__(self):
+            self.notifs = []
+
+        async def ai_task_vision(self, *a):
+            return json.dumps(gem)
+
+        async def appel(self, m, chemin, d=None, delai=60):
+            self.notifs.append(d)
+            return {}
+
+    ha = FauxHA()
+    agent = F.AgentFormulaires(ha, MAEL, foyer=FOYER)
+    res = asyncio.run(agent.traiter(str(src)))
+    assert res["ok"] and res["pour"] == "Aelia" and res["auto"] == 2, res
+    assert res["sortie"].startswith("sortie/Aelia_fiche_ecole_rempli_")
+    texte = subprocess.run(["pdftotext", str(tmp_path / res["sortie"]), "-"],
+                           capture_output=True, text=True).stdout
+    assert "KERHERVE Aelia" in texte and "KERHERVE Mael" not in texte
+    assert "Aelia" in ha.notifs[-1]["title"]

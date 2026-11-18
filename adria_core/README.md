@@ -83,3 +83,10 @@ Notification avec le résumé, puis pour chaque date OUI / NON / Modifier la dat
 OUI -> `calendar.create_event` dans `courrier_calendrier` (défaut `calendar.mael_adria`), description
 « Courrier lu par ADRIA le … ». Rappel J-3 chaque jour à `courrier_heure_rappel` (défaut 10:00) en relisant l'agenda.
 Résumé en mémoire vive uniquement. Fichiers : `adria_formulaires/courriers/entree` (+ `traites`/`echecs`, jamais effacés).
+
+## Formulaires pour tout le foyer (v0.8.0, lot F2)
+Option `formulaire_foyer` (onglet Configuration) : un membre par entrée (prenom, nom, naissance, lieu_naissance,
+etablissement, telephone, email, responsable). Mael = `formulaire_profil`, toujours responsable légal n°1.
+Page : « Pour qui ? » → le fichier est déposé en `@Prénom@nom.pdf`. Gemini donne à chaque champ un rôle
+(`personne` / `responsable1` / `responsable2`). Adresse du foyer pour tous ; téléphone/email du foyer seulement
+pour un adulte responsable (jamais recopiés pour un enfant) ; nom + prénom écrits seulement si les deux sont connus.

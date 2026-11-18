@@ -35,7 +35,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 
 def lire_options() -> dict:
@@ -74,7 +74,8 @@ class Core:
         self.heure_carnet: str = opts.get("heure_carnet") or "23:40"
         self.formulaires = AgentFormulaires(
             self, opts.get("formulaire_profil") or {},
-            opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
+            opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b",
+            opts.get("formulaire_foyer") or [])
         self.courriers = AgentCourriers(
             self, self.formulaires,
             opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b",
