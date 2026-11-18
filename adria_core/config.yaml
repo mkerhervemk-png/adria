@@ -1,7 +1,7 @@
 name: ADRIA Core
-version: "0.6.2"
+version: "0.7.0"
 slug: adria_core
-description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF.
+description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances.
 arch:
   - amd64
 init: false
@@ -39,6 +39,8 @@ options:
   ollama_modele: llama3.2:3b
   heure_carnet: "23:40"
   formulaire_notifier: notify.mobile_app_telephone_mael_sm_s921b
+  courrier_calendrier: calendar.mael_adria
+  courrier_heure_rappel: "10:00"
   formulaire_profil:
     nom: ""
     prenom: ""
@@ -61,6 +63,8 @@ schema:
   ollama_modele: str?
   heure_carnet: str?
   formulaire_notifier: str?
+  courrier_calendrier: str?
+  courrier_heure_rappel: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)?
   formulaire_profil:
     nom: str?
     prenom: str?

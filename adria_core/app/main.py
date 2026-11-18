@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+from courriers import AgentCourriers
 from formulaires import AgentFormulaires
 from memoire_agent import AgentMemoire
 from purge import LISTES as LISTES_PURGE, a_purger
@@ -34,7 +35,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.6.2"
+VERSION = "0.7.0"
 
 
 def lire_options() -> dict:
@@ -74,6 +75,12 @@ class Core:
         self.formulaires = AgentFormulaires(
             self, opts.get("formulaire_profil") or {},
             opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
+        self.courriers = AgentCourriers(
+            self, self.formulaires,
+            opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b",
+            opts.get("courrier_calendrier") or "calendar.mael_adria")
+        self.formulaires.autre = self.courriers
+        self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
         self.derniere_erreur: str | None = None
@@ -137,11 +144,13 @@ class Core:
 
     async def publier_etat_formulaires(self) -> None:
         d = self.formulaires.dernier or {}
+        c = self.courriers.dernier or {}
+        en_cours = self.formulaires.en_cours or self.courriers.en_cours
         try:
             await self.appel("POST", "/states/sensor.adria_core_formulaires", {
-                "state": "en_cours" if self.formulaires.en_cours else ("ok" if d.get("ok", True) else "erreur"),
+                "state": "en_cours" if en_cours else ("ok" if d.get("ok", True) and c.get("ok", True) else "erreur"),
                 "attributes": {"friendly_name": "ADRIA Core — formulaires", "icon": "mdi:file-document-edit",
-                               "dernier": d or None, "version": VERSION}})
+                               "dernier": d or None, "dernier_courrier": c or None, "version": VERSION}})
         except Exception as e:
             LOG.warning("Etat formulaires non publié : %s", e)
 
@@ -424,6 +433,7 @@ class Core:
                             asyncio.create_task(self.purger(e.get("data", {})))
                         elif e["event_type"] == "mobile_app_notification_action":
                             self.formulaires.recevoir_action(e.get("data", {}))
+                            self.courriers.recevoir_action(e.get("data", {}))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -453,13 +463,14 @@ class Core:
             await self.publier_etat_ia()
             await self.publier_etat_formulaires()
             try:
-                await PageFormulaires(self.formulaires, self).demarrer()
+                await PageFormulaires(self.formulaires, self, self.courriers).demarrer()
             except Exception:
                 LOG.exception("Page formulaires")
             await self.synchroniser()
             await asyncio.gather(self.ecouter(), self.battement(), self.planifier(),
                                  self.planifier(self.heure_carnet, self.faire_carnet),
-                                 self.formulaires.surveiller())
+                                 self.formulaires.surveiller(), self.courriers.surveiller(),
+                                 self.planifier(self.heure_rappel, self.courriers.rappeler))
 
 
 if __name__ == "__main__":

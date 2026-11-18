@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 from aiohttp import web
 
+import courriers as C
 import formulaires as F
 
 INGRESS_IP = "172.30.32.2"
@@ -38,12 +39,13 @@ def page(corps: str, message: str = "") -> web.Response:
         f"<h1>📝 ADRIA Formulaires</h1>{message}{corps}</body></html>"))
 
 
-def nom_propre(nom: str) -> str:
+def nom_propre(nom: str, ext: str = ".pdf") -> str:
     base = os.path.basename(unquote(nom or ""))
-    base = re.sub(r"[^\w\-. ]+", "_", base).strip(" .") or "formulaire.pdf"
-    if not base.lower().endswith(".pdf"):
-        base += ".pdf"
-    return base[:100]
+    tige, e = os.path.splitext(base)
+    if e.lower() not in (".pdf", ".jpg", ".jpeg", ".png", ".webp"):
+        tige = base
+    tige = re.sub(r"[^\w\-. ]+", "_", tige).strip(" .") or "document"
+    return tige[:90] + ext
 
 
 def lister_sorties(dossier: str, n: int = 15) -> list[str]:
@@ -55,9 +57,10 @@ def lister_sorties(dossier: str, n: int = 15) -> list[str]:
 
 
 class PageFormulaires:
-    def __init__(self, agent: F.AgentFormulaires, ha) -> None:
+    def __init__(self, agent: F.AgentFormulaires, ha, courriers: "C.AgentCourriers | None" = None) -> None:
         self.agent = agent
         self.ha = ha
+        self.courriers = courriers
 
     @web.middleware
     async def seulement_ha(self, request, handler):
@@ -86,11 +89,27 @@ class PageFormulaires:
         d = self.agent.dernier
         if d and not d.get("ok"):
             etat += f"<p class=ko>Dernier essai raté ({html.escape(d.get('fichier', ''))}) : {html.escape(d.get('erreur', ''))}</p>"
+        if self.courriers:
+            c_actif = await self.ha.etat("input_boolean.adria_core_courriers") == "on"
+            if not c_actif:
+                etat += "<p class=gris>Interrupteur « ADRIA Core courriers » éteint : mode Courrier en pause.</p>"
+            elif self.courriers.en_cours:
+                etat += "<p>⏳ Courrier en cours de lecture — réponds aux notifications.</p>"
+            c = self.courriers.dernier
+            if c and not c.get("ok"):
+                etat += f"<p class=ko>Dernier courrier raté : {html.escape(c.get('erreur', ''))}</p>"
+            elif c:
+                etat += (f"<p class=gris>Dernier courrier : {c.get('echeances', 0)} échéance(s) trouvée(s), "
+                         f"{c.get('ajoutees', 0)} ajoutée(s) à l'agenda.</p>")
+        modes = ("<p><label><input type=radio name=mode value=formulaire checked> 📝 Formulaire à remplir (PDF)</label><br>"
+                 "<label><input type=radio name=mode value=courrier> 📬 Courrier reçu (PDF ou photo) : "
+                 "échéances vers l'agenda</label></p>") if self.courriers else ""
         envoi = ("<div class=carte><form method=post action=envoyer enctype=multipart/form-data>"
-                 "<input type=file name=pdf accept='application/pdf,.pdf' required>"
+                 f"{modes}<input type=file name=pdf accept='application/pdf,.pdf,image/*' required>"
                  "<button>Envoyer à ADRIA</button></form>"
-                 "<p class=gris>ADRIA remplit ce qu'elle sait (nom, date…) et te pose le reste par "
-                 "notification. Rien de sensible n'est enregistré. Elle ne signe pas et n'envoie rien.</p>"
+                 "<p class=gris>Formulaire : ADRIA remplit ce qu'elle sait et te pose le reste. "
+                 "Courrier : ADRIA le résume et te propose ses dates limites ; rien n'entre dans "
+                 "l'agenda sans ton OUI. Rien de sensible n'est enregistré, rien n'est envoyé.</p>"
                  f"{etat}</div>")
         sortie = os.path.join(F.DOSSIER, "sortie")
         cartes = []
@@ -107,15 +126,26 @@ class PageFormulaires:
 
     async def envoyer(self, request) -> web.Response:
         lecteur = await request.multipart()
-        champ = await lecteur.next()
-        if champ is None or champ.name != "pdf" or not champ.filename:
+        mode, donnees, nom_recu = "formulaire", None, ""
+        while (champ := await lecteur.next()) is not None:
+            if champ.name == "mode":
+                mode = (await champ.text()).strip()
+            elif champ.name == "pdf" and champ.filename:
+                nom_recu = champ.filename
+                donnees = await champ.read(decode=False)
+        if not donnees:
             return await self.accueil(request, "<p class=ko>Aucun fichier reçu.</p>")
-        donnees = await champ.read(decode=False)
-        if not donnees.startswith(b"%PDF"):
-            return await self.accueil(request, "<p class=ko>Ce fichier n'est pas un PDF.</p>")
-        entree = os.path.join(F.DOSSIER, "entree")
+        ext = C.type_fichier(donnees)
+        if mode == "courrier" and self.courriers:
+            if ext is None:
+                return await self.accueil(request, "<p class=ko>Il faut un PDF ou une photo (JPG, PNG).</p>")
+            entree = self.courriers.dossier("entree")
+        else:
+            if ext != ".pdf":
+                return await self.accueil(request, "<p class=ko>Ce fichier n'est pas un PDF.</p>")
+            entree = os.path.join(F.DOSSIER, "entree")
         os.makedirs(entree, exist_ok=True)
-        nom = nom_propre(champ.filename)
+        nom = nom_propre(nom_recu, ext)
         chemin = os.path.join(entree, nom)
         if os.path.exists(chemin):
             nom = datetime.now().strftime("%H%M%S_") + nom

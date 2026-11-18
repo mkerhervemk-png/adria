@@ -54,3 +54,38 @@ def test_envoi_et_telechargement(tmp_path, monkeypatch):
     asyncio.run(scenario())
     assert (tmp_path / "entree" / "CONSENTEMENT PATIENT.pdf").exists()
     assert not (tmp_path / "entree" / "a.pdf").exists()
+
+
+def test_envoi_courrier_photo(tmp_path, monkeypatch):
+    import courriers as C
+    monkeypatch.setattr(F, "DOSSIER", str(tmp_path))
+    ha = FauxHA()
+    form = F.AgentFormulaires(ha)
+    page = W.PageFormulaires(form, ha, C.AgentCourriers(ha, form, "notify.tel"))
+
+    async def scenario():
+        runner = web.AppRunner(page.application())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        base = f"http://127.0.0.1:{port}/"
+        async with aiohttp.ClientSession() as s:
+            assert "Courrier reçu" in await (await s.get(base)).text()
+            fd = aiohttp.FormData()
+            fd.add_field("mode", "courrier")
+            fd.add_field("pdf", b"\xff\xd8\xff\xe0 photo", filename="IMG_2026.jpeg", content_type="image/jpeg")
+            assert "ADRIA commence" in await (await s.post(base + "envoyer", data=fd)).text()
+            fd = aiohttp.FormData()
+            fd.add_field("mode", "formulaire")
+            fd.add_field("pdf", b"\xff\xd8\xff\xe0 photo", filename="b.jpg")
+            assert "pas un PDF" in await (await s.post(base + "envoyer", data=fd)).text()
+            fd = aiohttp.FormData()
+            fd.add_field("mode", "courrier")
+            fd.add_field("pdf", b"<html>", filename="c.jpg")
+            assert "photo" in await (await s.post(base + "envoyer", data=fd)).text()
+        await runner.cleanup()
+
+    asyncio.run(scenario())
+    assert (tmp_path / "courriers" / "entree" / "IMG_2026.jpg").exists()
+    assert not (tmp_path / "entree").exists() or not list((tmp_path / "entree").glob("*.jpg"))

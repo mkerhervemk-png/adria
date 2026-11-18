@@ -463,7 +463,9 @@ class AgentFormulaires:
         while True:
             try:
                 os.makedirs(entree, exist_ok=True)
-                if self.en_cours is None and await self.ha.etat("input_boolean.adria_core_formulaires") == "on":
+                autre = getattr(self, "autre", None)  # agent Courriers : un seul échange à la fois
+                libre = self.en_cours is None and (autre is None or autre.en_cours is None)
+                if libre and await self.ha.etat("input_boolean.adria_core_formulaires") == "on":
                     pdfs = sorted(f for f in os.listdir(entree) if f.lower().endswith(".pdf"))
                     if pdfs:
                         await self.traiter(os.path.join(entree, pdfs[0]))

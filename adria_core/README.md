@@ -75,3 +75,11 @@ remplis seuls ; le reste est demandé par notification (boutons OUI/NON/Tout NON
 Réponses gardées en mémoire vive uniquement (ni base, ni journaux). Résultat : `adria_formulaires/sortie`
 (PDF + aperçu PNG), sans signature, jamais envoyé à personne. Originaux rangés dans `entree/traites` ou `entree/echecs`.
 État : `sensor.adria_core_formulaires`.
+
+## Courriers et échéances (v0.7.0, lot A1)
+Interrupteur `input_boolean.adria_core_courriers`. Même page, mode « Courrier reçu » : PDF (3 pages max) ou photo
+JPG/PNG/WEBP. Un seul appel Gemini Vision par courrier : expéditeur, objet, résumé, 3 échéances max (futures).
+Notification avec le résumé, puis pour chaque date OUI / NON / Modifier la date (réponse jj/mm[/aaaa] [14h30]).
+OUI -> `calendar.create_event` dans `courrier_calendrier` (défaut `calendar.mael_adria`), description
+« Courrier lu par ADRIA le … ». Rappel J-3 chaque jour à `courrier_heure_rappel` (défaut 10:00) en relisant l'agenda.
+Résumé en mémoire vive uniquement. Fichiers : `adria_formulaires/courriers/entree` (+ `traites`/`echecs`, jamais effacés).
