@@ -24,6 +24,7 @@ import aiohttp
 from courriers import AgentCourriers
 from formulaires import AgentFormulaires
 from habitudes import AgentHabitudes
+from consolidation import AgentConsolidation
 from memoire_agent import AgentMemoire
 from passe import AgentPasse, libelle
 from purge import LISTES as LISTES_PURGE, a_purger
@@ -37,7 +38,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.11.2"
+VERSION = "0.12.0"
 
 
 def lire_options() -> dict:
@@ -73,8 +74,10 @@ class Core:
         self.memoire = Memoire(BASE)
         self.routeur = Routeur(self)
         self.agent_memoire = AgentMemoire(self)
+        self.consolidation = AgentConsolidation(self)
         self.passe = AgentPasse(self)
         self.heure_carnet: str = opts.get("heure_carnet") or "23:40"
+        self.heure_consolidation: str = opts.get("heure_consolidation") or "02:15"
         self.formulaires = AgentFormulaires(
             self, opts.get("formulaire_profil") or {},
             opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b",
@@ -392,6 +395,7 @@ class Core:
                     "derniere_sync": self.derniere_sync,
                     "derniere_erreur": self.derniere_erreur,
                     "dernier_carnet": self.agent_memoire.dernier or None,
+                    "derniere_consolidation": self.consolidation.resume(),
                     "derniere_purge": self.derniere_purge,
                     "dernier_passe": self.passe.dernier,
                     "version": VERSION,
@@ -416,6 +420,21 @@ class Core:
         except Exception as e:
             resultat = {"req_id": req_id, "ok": False, "lignes": [], "texte": "", "erreur": str(e)[:200]}
         await self.appel("POST", "/events/adria_core_resultat", resultat)
+
+    async def consolider(self, data: dict | None = None) -> None:
+        """Lot M2b-2 : consolidation de nuit EN ESSAI (aucune écriture HA)."""
+        data = data or {}
+        try:
+            res = await self.consolidation.consolider(forcer=str(data.get("forcer")).lower() == "true")
+        except Exception as e:
+            LOG.exception("Consolidation")
+            res = {"ok": False, "raison": str(e)[:200]}
+        LOG.info("Consolidation (essai) : %s", {k: v for k, v in res.items() if k != "proposition"})
+        try:
+            await self.appel("POST", "/events/adria_core_consolider_resultat", res)
+            await self.publier_etat()
+        except Exception:
+            pass
 
     async def faire_carnet(self, data: dict | None = None) -> None:
         data = data or {}
@@ -448,6 +467,7 @@ class Core:
                     for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser",
                                              "adria_core_ia", "adria_core_carnet",
                                              "adria_core_purge", "adria_core_habitudes",
+                                             "adria_core_consolider",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -467,6 +487,8 @@ class Core:
                             asyncio.create_task(self.faire_carnet(e.get("data", {})))
                         elif e["event_type"] == "adria_core_purge":
                             asyncio.create_task(self.purger(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_consolider":
+                            asyncio.create_task(self.consolider(e.get("data", {})))
                         elif e["event_type"] == "adria_core_habitudes":
                             asyncio.create_task(self.habitudes_dimanche(e.get("data", {})))
                         elif e["event_type"] == "mobile_app_notification_action":
@@ -513,6 +535,7 @@ class Core:
                 LOG.exception("Habitudes")
             await asyncio.gather(self.ecouter(), self.battement(), self.planifier(),
                                  self.planifier(self.heure_carnet, self.faire_carnet),
+                                 self.planifier(self.heure_consolidation, self.consolider),
                                  self.formulaires.surveiller(), self.courriers.surveiller(),
                                  self.planifier(self.heure_rappel, self.courriers.rappeler),
                                  self.planifier(self.heure_habitudes, self.habitudes_dimanche))
