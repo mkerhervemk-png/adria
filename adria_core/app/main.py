@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+from formulaires import AgentFormulaires
 from memoire_agent import AgentMemoire
 from purge import LISTES as LISTES_PURGE, a_purger
 from routeur import Routeur
@@ -32,7 +33,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 
 
 def lire_options() -> dict:
@@ -69,6 +70,9 @@ class Core:
         self.routeur = Routeur(self)
         self.agent_memoire = AgentMemoire(self)
         self.heure_carnet: str = opts.get("heure_carnet") or "23:40"
+        self.formulaires = AgentFormulaires(
+            self, opts.get("formulaire_profil") or {},
+            opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
         self.derniere_erreur: str | None = None
@@ -104,6 +108,41 @@ class Core:
         )
         data = (rep.get("service_response") or {}).get("data")
         return data if isinstance(data, str) else ("" if data is None else json.dumps(data, ensure_ascii=False))
+
+    async def ai_task_vision(self, prompt: str, tache: str, medias: list[dict]) -> str:
+        """Gemini avec images (formulaires). Respecte quota 100/j et ia_gemini_ko ; repli Gemini Lite."""
+        try:
+            appels = int(float(await self.etat("counter.avatar_gemini_calls_today") or 0))
+        except ValueError:
+            appels = 0
+        entites = ["ai_task.google_ai_task_5", "ai_task.google_ai_task"]
+        if appels >= 100 or await self.etat("input_boolean.ia_gemini_ko") == "on":
+            entites = entites[1:]
+        derniere = None
+        for entite in entites:
+            try:
+                rep = await self.appel(
+                    "POST", "/services/ai_task/generate_data?return_response",
+                    {"entity_id": entite, "instructions": prompt, "task_name": tache,
+                     "attachments": medias}, delai=180)
+                if entite.endswith("_5"):
+                    await self.incrementer("counter.avatar_gemini_calls_today")
+                data = (rep.get("service_response") or {}).get("data")
+                return data if isinstance(data, str) else json.dumps(data or {}, ensure_ascii=False)
+            except Exception as e:
+                derniere = e
+                LOG.warning("Vision %s : %s", entite, str(e)[:150])
+        raise RuntimeError(f"IA vision indisponible ({str(derniere)[:80]})")
+
+    async def publier_etat_formulaires(self) -> None:
+        d = self.formulaires.dernier or {}
+        try:
+            await self.appel("POST", "/states/sensor.adria_core_formulaires", {
+                "state": "en_cours" if self.formulaires.en_cours else ("ok" if d.get("ok", True) else "erreur"),
+                "attributes": {"friendly_name": "ADRIA Core — formulaires", "icon": "mdi:file-document-edit",
+                               "dernier": d or None, "version": VERSION}})
+        except Exception as e:
+            LOG.warning("Etat formulaires non publié : %s", e)
 
     async def ollama(self, prompt: str) -> str:
         assert self.session is not None
@@ -362,7 +401,8 @@ class Core:
                         raise RuntimeError(f"auth refusée : {rep}")
                     for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser",
                                              "adria_core_ia", "adria_core_carnet",
-                                             "adria_core_purge"), 1):
+                                             "adria_core_purge",
+                                             "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
                     attente = 5
@@ -381,6 +421,8 @@ class Core:
                             asyncio.create_task(self.faire_carnet(e.get("data", {})))
                         elif e["event_type"] == "adria_core_purge":
                             asyncio.create_task(self.purger(e.get("data", {})))
+                        elif e["event_type"] == "mobile_app_notification_action":
+                            self.formulaires.recevoir_action(e.get("data", {}))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -408,9 +450,11 @@ class Core:
             self.session = session
             await asyncio.sleep(10)  # laisser Home Assistant finir de démarrer
             await self.publier_etat_ia()
+            await self.publier_etat_formulaires()
             await self.synchroniser()
             await asyncio.gather(self.ecouter(), self.battement(), self.planifier(),
-                                 self.planifier(self.heure_carnet, self.faire_carnet))
+                                 self.planifier(self.heure_carnet, self.faire_carnet),
+                                 self.formulaires.surveiller())
 
 
 if __name__ == "__main__":
