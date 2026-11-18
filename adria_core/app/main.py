@@ -28,6 +28,8 @@ from consolidation import AgentConsolidation
 from memoire_agent import AgentMemoire
 from passe import AgentPasse, libelle
 from purge import LISTES as LISTES_PURGE, a_purger
+from competences import AgentCompetences
+from journal import AgentJournal
 from retrouver import Retrouver
 from routeur import Routeur
 import suivis as S
@@ -40,7 +42,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 
 
 def lire_options() -> dict:
@@ -95,6 +97,10 @@ class Core:
         self.courriers.suivis = self.suivis
         self.courriers.apres_suivi = self.publier_suivis
         self.retrouver = Retrouver(self, self.formulaires)  # lot A6
+        notif = opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b"
+        self.journal = AgentJournal(self, notif)  # lot J1
+        self.heure_journal: str = opts.get("journal_heure") or "17:45"
+        self.competences = AgentCompetences(self, notif)  # lot C1
         self.habitudes = AgentHabitudes(
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.heure_habitudes: str = opts.get("habitudes_heure") or "17:30"
@@ -191,6 +197,40 @@ class Core:
                 "title": "📑 Abonnements et garanties", "message": "\n".join(msgs),
                 "data": {"tag": "adria_suivis", "channel": "ADRIA courriers"}})
         await self.publier_suivis()
+
+    async def ws_commande(self, message: dict):
+        """Une commande WebSocket ponctuelle (registre des entités…), sur une connexion à part."""
+        assert self.session is not None
+        async with self.session.ws_connect(WS) as ws:
+            await ws.receive_json()
+            await ws.send_json({"type": "auth", "access_token": TOKEN})
+            if (await ws.receive_json()).get("type") != "auth_ok":
+                raise RuntimeError("auth refusée")
+            await ws.send_json({"id": 1, **message})
+            while True:
+                rep = await ws.receive_json(timeout=60)
+                if rep.get("id") == 1:
+                    if not rep.get("success"):
+                        raise RuntimeError(str(rep.get("error"))[:150])
+                    return rep.get("result")
+
+    async def repondre_evenement(self, nom: str, coro) -> None:
+        """Lance un agent et renvoie son résultat dans l'événement `nom` (voix)."""
+        try:
+            res = await coro
+        except Exception as e:
+            LOG.warning("%s : %s", nom, type(e).__name__)
+            res = {"ok": False, "texte": "Je n'ai pas pu le faire, il y a eu une erreur."}
+        try:
+            await self.appel("POST", f"/events/{nom}", res)
+        except Exception:
+            pass
+
+    async def journal_dimanche(self, data: dict | None = None) -> None:
+        try:
+            await self.journal.proposer(forcer=str((data or {}).get("forcer")).lower() == "true")
+        except Exception:
+            LOG.exception("Journal de famille")
 
     async def papier(self, data: dict) -> None:
         """Lot A6 : « sors-moi le papier » (voix)."""
@@ -506,6 +546,8 @@ class Core:
                                              "adria_core_ia", "adria_core_carnet",
                                              "adria_core_purge", "adria_core_habitudes",
                                              "adria_core_consolider", "adria_core_papier",
+                                             "adria_core_souvenir", "adria_core_livre", "adria_core_journal",
+                                             "adria_core_apprendre", "adria_core_competences_couper",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -527,6 +569,20 @@ class Core:
                             asyncio.create_task(self.purger(e.get("data", {})))
                         elif e["event_type"] == "adria_core_consolider":
                             asyncio.create_task(self.consolider(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_souvenir":
+                            d = e.get("data", {})
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_souvenir_resultat", self.journal.garder_voix(d)))
+                        elif e["event_type"] == "adria_core_livre":
+                            asyncio.create_task(self.journal.livre((e.get("data") or {}).get("annee")))
+                        elif e["event_type"] == "adria_core_journal":
+                            asyncio.create_task(self.journal_dimanche(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_apprendre":
+                            d = e.get("data", {})
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_apprendre_resultat", self.competences.apprendre(d)))
+                        elif e["event_type"] == "adria_core_competences_couper":
+                            asyncio.create_task(self.competences.couper_tout())
                         elif e["event_type"] == "adria_core_papier":
                             asyncio.create_task(self.papier(e.get("data", {})))
                         elif e["event_type"] == "adria_core_habitudes":
@@ -535,6 +591,8 @@ class Core:
                             self.habitudes.recevoir_action(e.get("data", {}))
                             self.formulaires.recevoir_action(e.get("data", {}))
                             self.courriers.recevoir_action(e.get("data", {}))
+                            self.journal.recevoir_action(e.get("data", {}))
+                            asyncio.create_task(self.competences.recevoir_action(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -580,6 +638,8 @@ class Core:
                                  self.formulaires.surveiller(), self.courriers.surveiller(),
                                  self.planifier(self.heure_rappel, self.courriers.rappeler),
                                  self.planifier(self.heure_rappel, self.rappeler_suivis),
+                                 self.planifier(self.heure_journal, self.journal_dimanche),
+                                 self.planifier("10:05", self.journal.livre_si_15_decembre),
                                  self.planifier(self.heure_habitudes, self.habitudes_dimanche))
 
 

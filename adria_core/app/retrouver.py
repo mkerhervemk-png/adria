@@ -22,7 +22,7 @@ LOG = logging.getLogger("adria_core.retrouver")
 RACINE = "/media/adria_documents"
 INTERRUPTEUR = "input_boolean.adria_core_papiers"
 NOM = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.+?)(?:_\d{1,2})?$")
-EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png", ".webp")
+EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png", ".webp", ".html")
 # racines (5 lettres, comme mots_cles) des mots de la demande qui ne décrivent pas le papier
 MOTS_DEMANDE = {"envoi", "sors", "sort", "trouv", "retro", "papie", "docum", "montr", "ouvre",
                 "ouvri", "besoi", "voudr", "veux", "affic", "cherc", "telep", "porta", "copie",
@@ -89,6 +89,8 @@ def libelle(d: dict) -> str:
 
 def apercu(source: str, sortie_png: str) -> bool:
     """1re page d'un PDF (ou l'image) en PNG pour la notification."""
+    if source.lower().endswith(".html"):
+        return False
     os.makedirs(os.path.dirname(sortie_png), exist_ok=True)
     try:
         if source.lower().endswith(".pdf"):
