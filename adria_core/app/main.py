@@ -23,6 +23,7 @@ import aiohttp
 
 from courriers import AgentCourriers
 from formulaires import AgentFormulaires
+from habitudes import AgentHabitudes
 from memoire_agent import AgentMemoire
 from passe import AgentPasse, libelle
 from purge import LISTES as LISTES_PURGE, a_purger
@@ -36,7 +37,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.10.1"
+VERSION = "0.11.0"
 
 
 def lire_options() -> dict:
@@ -85,6 +86,9 @@ class Core:
             opts.get("courrier_calendrier") or "calendar.mael_adria",
             opts.get("onedrive_entree") or None)
         self.formulaires.autre = self.courriers
+        self.habitudes = AgentHabitudes(
+            self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
+        self.heure_habitudes: str = opts.get("habitudes_heure") or "17:30"
         self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
@@ -235,6 +239,10 @@ class Core:
         """Signal de vie : sensor.adria_core_ia mis à jour chaque minute (lu par HA)."""
         while True:
             await self.publier_etat_ia()
+            try:
+                await self.habitudes.minute()
+            except Exception as e:
+                LOG.warning("Rappels d'habitude : %s", str(e)[:150])
             await asyncio.sleep(60)
 
     async def synchroniser(self) -> None:
@@ -274,6 +282,19 @@ class Core:
         await self.synchroniser()
         if await self.etat("input_boolean.adria_core_purge") == "on":
             await self.purger()
+        try:  # calcul des habitudes (0 IA), visible dans sensor.adria_core_habitudes
+            self.habitudes.calculer()
+            await self.habitudes.publier()
+        except Exception:
+            LOG.exception("Habitudes")
+
+    async def habitudes_dimanche(self, data: dict | None = None) -> None:
+        data = data or {}
+        try:
+            await self.habitudes.proposer(essai=str(data.get("essai")).lower() == "true",
+                                          forcer=str(data.get("forcer")).lower() == "true")
+        except Exception:
+            LOG.exception("Propositions d'habitudes")
 
     def _choisir(self, liste: str, source: str, items: list[dict], maintenant: datetime):
         self.memoire.ajouter(source, items)  # recopie juste avant : rien ne se perd
@@ -425,7 +446,7 @@ class Core:
                         raise RuntimeError(f"auth refusée : {rep}")
                     for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser",
                                              "adria_core_ia", "adria_core_carnet",
-                                             "adria_core_purge",
+                                             "adria_core_purge", "adria_core_habitudes",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -445,7 +466,10 @@ class Core:
                             asyncio.create_task(self.faire_carnet(e.get("data", {})))
                         elif e["event_type"] == "adria_core_purge":
                             asyncio.create_task(self.purger(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_habitudes":
+                            asyncio.create_task(self.habitudes_dimanche(e.get("data", {})))
                         elif e["event_type"] == "mobile_app_notification_action":
+                            self.habitudes.recevoir_action(e.get("data", {}))
                             self.formulaires.recevoir_action(e.get("data", {}))
                             self.courriers.recevoir_action(e.get("data", {}))
                         elif e["event_type"] == "adria_core_synchroniser":
@@ -481,10 +505,16 @@ class Core:
             except Exception:
                 LOG.exception("Page formulaires")
             await self.synchroniser()
+            try:
+                self.habitudes.calculer()
+                await self.habitudes.publier()
+            except Exception:
+                LOG.exception("Habitudes")
             await asyncio.gather(self.ecouter(), self.battement(), self.planifier(),
                                  self.planifier(self.heure_carnet, self.faire_carnet),
                                  self.formulaires.surveiller(), self.courriers.surveiller(),
-                                 self.planifier(self.heure_rappel, self.courriers.rappeler))
+                                 self.planifier(self.heure_rappel, self.courriers.rappeler),
+                                 self.planifier(self.heure_habitudes, self.habitudes_dimanche))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 name: ADRIA Core
-version: "0.10.1"
+version: "0.11.0"
 slug: adria_core
-description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances, classement des papiers, « Mon passé ».
+description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances, classement des papiers, « Mon passé », habitudes repérées.
 arch:
   - amd64
 init: false
@@ -75,6 +75,7 @@ schema:
   formulaire_notifier: str?
   courrier_calendrier: str?
   courrier_heure_rappel: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)?
+  habitudes_heure: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)?
   onedrive_entree: str?
   formulaire_profil:
     nom: str?

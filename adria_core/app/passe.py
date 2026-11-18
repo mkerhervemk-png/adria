@@ -32,6 +32,8 @@ HISTORIQUE_PASSE = [
     "input_datetime.*derniere_revision", "input_datetime.ct_*", "input_datetime.*controle_technique",
     "input_datetime.*echeance_assurance", "input_datetime.prochaine_maintenance_*",
     "input_number.kilometrage_*_derniere_revision", "input_text.adria_mails_recents",
+    # lot H1 (habitudes) : Inster branchée / à la maison
+    "binary_sensor.inster_ev_battery_plug", "device_tracker.inster_location",
 ]
 CALENDRIERS_EXCLUS = re.compile(r"vacances|ferie|holiday", re.I)
 JOURS_AGENDA_DEPART = 400
