@@ -21,6 +21,7 @@ import subprocess
 import uuid
 from datetime import date, datetime, timedelta
 
+import classement
 import formulaires as F
 
 LOG = logging.getLogger("adria_core.courriers")
@@ -38,6 +39,8 @@ PROMPT = (
     "pages). Nous sommes le {jour}. Reponds UNIQUEMENT par un JSON : "
     '{{"expediteur": "organisme ou personne qui ecrit (court)", "objet": "sujet en quelques mots", '
     '"resume": "ce que dit le courrier et ce qu il faut faire, 2 phrases maximum", '
+    '"categorie": "' + classement.TEXTE_CATEGORIES + '", '
+    '"pour": "prenom du destinataire parmi : {prenoms} ; vide si c est pour tout le foyer", '
     '"echeances": [ {{"date": "AAAA-MM-JJ", "heure": "HH:MM ou vide", '
     '"action": "ce qu il faut faire a cette date, en 6 mots maximum"}} ]}}. '
     "Une echeance = une date limite, un rendez-vous, une convocation, un prelevement ou une "
@@ -80,7 +83,8 @@ def analyser(d: dict, aujourdhui: date) -> dict:
         echeances.append({"date": jour, "heure": h, "action": _court(e.get("action") or "À traiter", 50)})
     echeances.sort(key=lambda e: (e["date"], e["heure"]))
     d = d if isinstance(d, dict) else {}
-    return {"expediteur": _court(d.get("expediteur") or "Courrier", 40),
+    return {"categorie": str(d.get("categorie") or "autre"), "pour": str(d.get("pour") or "").strip(),
+            "expediteur": _court(d.get("expediteur") or "Courrier", 40),
             "objet": _court(d.get("objet") or "", 60),
             "resume": _court(d.get("resume") or "", 220),
             "echeances": echeances[:MAX_ECHEANCES]}
@@ -154,8 +158,10 @@ def type_fichier(donnees: bytes) -> str | None:
 class AgentCourriers:
     """`ha` = le Core : etat(), appel(), ai_task_vision(). `formulaires` sert au partage du téléphone."""
 
-    def __init__(self, ha, formulaires, notifier: str, calendrier: str = "calendar.mael_adria") -> None:
+    def __init__(self, ha, formulaires, notifier: str, calendrier: str = "calendar.mael_adria",
+                 onedrive: str | None = None) -> None:
         self.ha = ha
+        self.onedrive = onedrive
         self.formulaires = formulaires
         self.notifier = notifier
         self.calendrier = calendrier
@@ -219,7 +225,9 @@ class AgentCourriers:
         if not medias:
             raise RuntimeError("aucune page lisible")
         rep = await self.ha.ai_task_vision(
-            PROMPT.format(jour=date.today().strftime("%d/%m/%Y")), "adria_core_courrier",
+            PROMPT.format(jour=date.today().strftime("%d/%m/%Y"),
+                          prenoms=", ".join(p["prenom"] for p in self.formulaires.personnes)),
+            "adria_core_courrier",
             [{"media_content_id": f"{F.MEDIA_LOCAL}/{SOUS_DOSSIER}/travail/{ident}/{nom}",
               "media_content_type": typ} for nom, typ in medias])
         return F.lire_json(rep)
@@ -282,6 +290,17 @@ class AgentCourriers:
             lignes = [courrier["objet"], courrier["resume"]]
             if not courrier["echeances"]:
                 lignes.append("Aucune date limite trouvée : rien à mettre dans l'agenda.")
+            pour = next((p["prenom"] for p in self.formulaires.personnes
+                         if courrier["pour"] and p["prenom"].lower() == courrier["pour"].lower()), "Foyer")
+            cl = None
+            try:
+                cl = await classement.classer(self.ha, fichier, pour, courrier["categorie"],
+                                              f"{courrier['expediteur']}_{courrier['objet']}", self.onedrive)
+            except Exception as e:
+                LOG.warning("Classement : %s", type(e).__name__)
+            if cl:
+                res["classe"] = cl
+                lignes.append(f"Classé : {cl['dossier']}" + (" (+ OneDrive)." if cl["onedrive"] == "ok" else "."))
             await self.notifier_tel(f"📬 {courrier['expediteur']}", "\n".join(l for l in lignes if l))
             res["ajoutees"] = (await self.proposer(courrier))[0] if courrier["echeances"] else 0
             if res["ajoutees"]:

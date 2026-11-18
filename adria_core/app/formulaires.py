@@ -19,6 +19,8 @@ import re
 import shutil
 import subprocess
 import uuid
+
+import classement
 from datetime import date, datetime
 from html import unescape
 
@@ -38,7 +40,8 @@ LEADER = re.compile(r"^[.…_\-]{3,}$")
 PROMPT = (
     "Tu regardes une page de formulaire administratif francais (image). Repere chaque champ "
     "que la personne doit remplir. Reponds UNIQUEMENT par un JSON : "
-    '{"titre": "nom court du document", "champs": [ {"libelle": "texte du champ", '
+    '{"titre": "nom court du document", "categorie": "' + classement.TEXTE_CATEGORIES + '", '
+    '"champs": [ {"libelle": "texte du champ", '
     '"type": "texte|oui_non|case|signature", "cle": "nom|prenom|nom_prenom|naissance|'
     'lieu_naissance|adresse|code_postal|ville|telephone|email|etablissement|date_jour|lieu_signature|autre", '
     '"role": "personne|responsable1|responsable2", '
@@ -341,8 +344,9 @@ class AgentFormulaires:
 
     def __init__(self, ha, profil: dict | None = None,
                  notifier: str = "notify.mobile_app_telephone_mael_sm_s921b",
-                 foyer: list | None = None) -> None:
+                 foyer: list | None = None, onedrive: str | None = None) -> None:
         self.ha = ha
+        self.onedrive = onedrive
         self.profil = profil or {}
         self.personnes = personnes_foyer(self.profil, foyer)
         self.notifier = notifier
@@ -402,6 +406,7 @@ class AgentFormulaires:
 
     # ---- détection
     async def detecter(self, travail: str, pdf: str, nom_media: str) -> tuple[str, list[dict]]:
+        """Remplit aussi self._categorie (type du document, pour le classement)."""
         subprocess.run(["pdftoppm", "-r", "110", "-png", "-l", str(MAX_PAGES), pdf,
                         os.path.join(travail, "p")], check=True, timeout=120)
         xml = subprocess.run(["pdftotext", "-bbox-layout", "-l", str(MAX_PAGES), pdf, "-"],
@@ -410,6 +415,7 @@ class AgentFormulaires:
         from pypdf import PdfReader
         pages = PdfReader(pdf).pages[:MAX_PAGES]
         titre, champs = "", []
+        self._categorie = "autre"
         images = sorted(f for f in os.listdir(travail) if re.fullmatch(r"p-\d+\.png", f))
         for i, (img, page) in enumerate(zip(images, pages), 1):
             rep = await self.ha.ai_task_vision(
@@ -418,6 +424,8 @@ class AgentFormulaires:
                   "media_content_type": "image/png"}])
             d = lire_json(rep)
             titre = titre or str(d.get("titre") or "")
+            if i == 1:
+                self._categorie = str(d.get("categorie") or "autre")
             champs += normaliser(d.get("champs") or [], i, mots,
                                  float(page.mediabox.width), float(page.mediabox.height))
         return titre[:60] or "Formulaire", champs
@@ -456,11 +464,21 @@ class AgentFormulaires:
                             pdf_sortie, os.path.join(DOSSIER, "sortie", sortie)], check=True, timeout=60)
             vides = [c["libelle"] for c in champs if c.get("valeur") in (None, "")]
             res.update(ok=True, sortie=f"sortie/{sortie}.pdf", vides=len(vides))
+            cl = None
+            try:
+                cl = await classement.classer(self.ha, pdf_sortie, res["pour"], self._categorie,
+                                              titre.split(" — ")[0], self.onedrive)
+            except Exception as e:
+                LOG.warning("Classement : %s", type(e).__name__)
+            if cl:
+                res["classe"] = cl
             await self.notifier_tel(
                 f"✅ {titre} rempli",
                 f"{res['ecrits']} champs remplis"
                 + (f", {len(vides)} laissés vides ({', '.join(vides[:3])})" if vides else "")
-                + ". Signature à faire par toi. PDF dans le menu HA > ADRIA Formulaires.",
+                + ". Signature à faire par toi. PDF dans le menu HA > ADRIA Formulaires."
+                + (f" Classé : {cl['dossier']}" + (" (+ OneDrive)." if cl["onedrive"] == "ok" else ".")
+                   if cl else ""),
                 [{"action": "URI", "title": "Ouvrir / télécharger", "uri": PAGE_UI}],
                 image=f"{URL_LOCAL}/sortie/{sortie}.png")
         except Exception as e:

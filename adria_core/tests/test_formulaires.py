@@ -191,10 +191,20 @@ def test_formulaire_pour_un_enfant(tmp_path, monkeypatch):
             self.notifs.append(d)
             return {}
 
+    import classement as K
+    monkeypatch.setattr(K, "RACINE", str(tmp_path / "docs"))
+    gem["categorie"] = "ecole"
+
+    async def etat(e):
+        return "on"
     ha = FauxHA()
-    agent = F.AgentFormulaires(ha, MAEL, foyer=FOYER)
+    ha.etat = etat
+    agent = F.AgentFormulaires(ha, MAEL, foyer=FOYER, onedrive="E1")
     res = asyncio.run(agent.traiter(str(src)))
     assert res["ok"] and res["pour"] == "Aelia" and res["auto"] == 2, res
+    assert res["classe"] == {"dossier": "Aelia/École", "onedrive": "ok"}
+    assert len(os.listdir(tmp_path / "docs" / "Aelia" / "École")) == 1
+    assert "Classé : Aelia/École (+ OneDrive)." in ha.notifs[-1]["message"]
     assert res["sortie"].startswith("sortie/Aelia_fiche_ecole_rempli_")
     texte = subprocess.run(["pdftotext", str(tmp_path / res["sortie"]), "-"],
                            capture_output=True, text=True).stdout

@@ -84,7 +84,7 @@ class FauxCore:
     async def publier_etat_formulaires(self):
         pass
 
-    async def appel(self, methode, chemin, data=None):
+    async def appel(self, methode, chemin, data=None, delai=60):
         self.appels.append((chemin, data))
         if chemin.startswith("/services/notify"):
             self.notifs.append(data)
@@ -106,10 +106,14 @@ class FauxCore:
 def test_traiter_photo_bout_en_bout(tmp_path, monkeypatch):
     monkeypatch.setattr(F, "DOSSIER", str(tmp_path))
     vision = ('```json\n{"expediteur": "Mairie", "objet": "Carte d\'identité", "resume": "Dossier prêt.",'
+              ' "categorie": "autre", "pour": "aelia",'
               f' "echeances": [{{"date": "{D1}", "heure": "", "action": "Retirer la carte"}},'
               f' {{"date": "{D2}", "heure": "", "action": "Second"}}]}}\n```')
+    import classement as K
+    monkeypatch.setattr(K, "RACINE", str(tmp_path / "docs"))
     ha = FauxCore(vision)
-    agent = C.AgentCourriers(ha, F.AgentFormulaires(ha), "notify.tel")
+    agent = C.AgentCourriers(ha, F.AgentFormulaires(ha, {"prenom": "Mael"}, foyer=[{"prenom": "Aelia"}]),
+                             "notify.tel", onedrive="E1")
     ha.agent = agent
     ha.reponses = ["MODIF", D3.strftime("%d/%m/%Y") + " 10h00", "OUI", "NON"]
     entree = tmp_path / "courriers" / "entree"
@@ -118,6 +122,8 @@ def test_traiter_photo_bout_en_bout(tmp_path, monkeypatch):
     photo.write_bytes(b"\xff\xd8\xff\xe0 photo")
     res = asyncio.run(agent.traiter(str(photo)))
     assert res["ok"] and res["echeances"] == 2 and res["ajoutees"] == 1
+    assert res["classe"]["dossier"] == "Aelia/Autre"
+    assert any(c == "/services/onedrive/upload" for c, _ in ha.appels)
     assert ha.medias[0]["media_content_id"].endswith("/lettre.jpg") is False  # copie dans travail
     assert ha.medias[0]["media_content_type"] == "image/jpeg"
     crees = [d for c, d in ha.appels if c == "/services/calendar/create_event"]

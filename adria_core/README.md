@@ -90,3 +90,10 @@ etablissement, telephone, email, responsable). Mael = `formulaire_profil`, toujo
 Page : « Pour qui ? » → le fichier est déposé en `@Prénom@nom.pdf`. Gemini donne à chaque champ un rôle
 (`personne` / `responsable1` / `responsable2`). Adresse du foyer pour tous ; téléphone/email du foyer seulement
 pour un adulte responsable (jamais recopiés pour un enfant) ; nom + prénom écrits seulement si les deux sont connus.
+
+## Classement des papiers (v0.9.0, lot A3)
+Interrupteur `input_boolean.adria_core_classement`. Après chaque formulaire rempli (PDF rempli) et chaque courrier
+lu (original), une copie va dans `/media/adria_documents/<Personne>/<Type>/<AAAA-MM-JJ>_<titre>.<ext>` puis sur
+OneDrive (`onedrive_entree`, dossier Apps/Home Assistant/ADRIA/documents/<Personne>/<Type>). Type donné par Gemini
+dans l'appel existant (école, santé, assurance, impôts, banque, voiture, maison, sport, travail, autre) ; courrier :
+destinataire parmi les prénoms du foyer, sinon « Foyer ». Copies seulement, jamais d'écrasement (_2, _3…).
