@@ -37,7 +37,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 
 
 def lire_options() -> dict:

@@ -12,8 +12,8 @@
 
 Règles observées (liste fermée, chacune avec son rappel) :
 - inster : l'Inster est à la maison mais pas branchée à 21h00 -> rappel à 20h45.
-- lumiere : des lumières restent allumées 20 min après le départ de Mael -> rappel à son départ,
-  s'il en reste d'allumées.
+- lumiere : des lumières restent allumées 20 min après le départ de Mael alors que personne d'autre
+  n'est à la maison -> rappel à son départ, s'il en reste d'allumées et que la maison est vide.
 - tv_nuit : la TV du salon est encore allumée 10 min après le passage en mode nuit -> rappel au
   passage en mode nuit si elle est allumée.
 """
@@ -52,8 +52,8 @@ REGLES = {
                "constat": "l'Inster était à la maison mais pas branchée à 21 h",
                "rappel": "je te le rappelle ces jours-là à 20 h 45, seulement si elle n'est pas branchée"},
     "lumiere": {"titre": "💡 Lumières",
-                "constat": "des lumières restaient allumées après ton départ",
-                "rappel": "je te préviens au moment où tu pars, seulement s'il en reste d'allumées"},
+                "constat": "des lumières restaient allumées après ton départ, maison vide",
+                "rappel": "je te préviens au moment où tu pars, seulement s'il en reste d'allumées et que personne n'est à la maison"},
     "tv_nuit": {"titre": "📺 TV du salon",
                 "constat": "la TV du salon était encore allumée après le passage en mode nuit",
                 "rappel": "je te préviens au passage en mode nuit, seulement si elle est allumée"},
@@ -113,8 +113,9 @@ def observer(h: dict, jour: date) -> dict[str, bool | None]:
     # lumiere : 1er départ de Mael dans la journée
     depart = next((t for t, a, b in transitions(h.get(MAEL), d0, d0 + timedelta(days=1))
                    if a == "home" and b not in ("home", "inconnu")), None)
-    if depart is None:
-        res["lumiere"] = None
+    autres = [e for e in h if e.startswith("person.") and e != MAEL]
+    if depart is None or any(etat_a(h[e], depart + timedelta(minutes=20)) == "home" for e in autres):
+        res["lumiere"] = None  # quelqu'un est resté à la maison : ce n'est pas un oubli
     else:
         lum = [e for e in h if e.startswith("light.") and not LUMIERES_EXCLUES.search(e)]
         res["lumiere"] = any(etat_a(h[e], depart + timedelta(minutes=20)) == "on" for e in lum)
@@ -138,7 +139,7 @@ def situations(quart: str | None, jour: date) -> list[str]:
 def libelle_situation(cle: str) -> str:
     typ, _, val = cle.partition(":")
     if typ == "quart":
-        return f"les jours de quart {QUARTS[val]}"
+        return "les jours de repos" if val == "repos" else f"les jours de quart {QUARTS[val]}"
     if typ == "jour":
         return f"le {val}"
     j, q = val.split("|")
@@ -217,7 +218,7 @@ class AgentHabitudes:
         debut = (aujourdhui - timedelta(days=FENETRE_JOURS + 3)).isoformat()
         lignes = self.core.memoire.db.execute(
             "SELECT resume, detail, date_evt FROM lignes WHERE source = 'historique' AND date_evt >= ?"
-            " AND (detail LIKE 'light.%' OR detail IN (?, ?, ?, ?, ?, ?))",
+            " AND (detail LIKE 'light.%' OR detail LIKE 'person.%' OR detail IN (?, ?, ?, ?, ?, ?))",
             (debut, QUART, MAEL, NUIT, TV, INSTER_LIEU, INSTER_PRISE)).fetchall()
         return lire_lignes([tuple(r) for r in lignes])
 
@@ -333,6 +334,9 @@ class AgentHabitudes:
                     texte = "L'Inster est à la maison mais pas branchée."
             elif r["regle"] == "lumiere" and avant.get(MAEL) == "home" and e[MAEL] not in ("home", None):
                 etats = await self.core.appel("GET", "/states")
+                if any(s["entity_id"].startswith("person.") and s["entity_id"] != MAEL and s.get("state") == "home"
+                       for s in etats):
+                    continue  # quelqu'un est encore à la maison
                 allumees = [s.get("attributes", {}).get("friendly_name") or s["entity_id"] for s in etats
                             if s["entity_id"].startswith("light.") and s.get("state") == "on"
                             and not LUMIERES_EXCLUES.search(s["entity_id"])]

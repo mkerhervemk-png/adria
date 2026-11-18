@@ -72,6 +72,17 @@ def test_candidat_inster_quart_de_nuit():
     assert "21 h" in H.message(c[0]) and "D'accord" in H.message(c[0])
 
 
+def test_lumiere_pas_un_oubli_si_quelqu_un_reste():
+    j = date(2026, 12, 1)
+    d0 = datetime(2026, 12, 1)
+    h = {H.MAEL: [(d0 + timedelta(hours=8), "home"), (d0 + timedelta(hours=19), "not_home")],
+         "person.vanessa": [(d0, "home")], "light.salon": [(d0 + timedelta(hours=18), "on")]}
+    assert H.observer(h, j)["lumiere"] is None
+    h["person.vanessa"] = [(d0, "not_home")]
+    assert H.observer(h, j)["lumiere"] is True
+    assert H.libelle_situation("quart:repos") == "les jours de repos"
+
+
 def test_aucun_candidat_sans_oubli():
     assert H.AgentHabitudes(FauxCore(historique_type(oubli_nuit=False)), "n.x").calculer(AUJ) == []
 
