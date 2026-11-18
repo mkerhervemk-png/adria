@@ -44,6 +44,13 @@ def test_recherche_quand_et_periode():
     assert r and "Pneus" in r[0]["texte"] and r[0]["date"] == "2026-03-12"
     r = m.chercher("Qu'avait dit l'école en octobre ?", auj=date(2026, 11, 18))
     assert r and r[0]["source"] == "papiers"
+    m.ajouter("adria_savoir", [{"summary": "[regle] rappeler le changement d heure"}])
+    assert m.chercher("Quand ai-je changé les pneus de la 5008 ?") == [] or \
+        all("pneu" in x["texte"].lower() for x in m.chercher("Quand ai-je changé les pneus de la 5008 ?"))
+    assert m.chercher("Quand ai-je changé le filtre ?") == []  # « changé » seul ne suffit pas
+    m.ajouter("agenda", P.lignes_agenda([{"summary": "Cours Aelia (école)", "start": f"2026-10-0{j}"} for j in (1, 2, 5)]))
+    r = m.chercher("Qu'avait dit l'école en octobre ?", auj=date(2026, 11, 18))
+    assert "papiers" in [x["source"] for x in r] and sum("Cours" in x["texte"] for x in r) == 1
     assert P.libelle("papiers") == "papier classé" and P.libelle("archive/souvenir") == "souvenir"
 
 

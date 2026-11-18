@@ -43,6 +43,22 @@ def mots_cles(question: str) -> list[str]:
     return vus
 
 
+VERBES_SOUPLES = {"chang", "chan", "faire", "fais", "allee", "alle", "aller", "mis", "mise", "mettr",
+                  "eu", "achet", "pris", "prend", "rendu", "vu", "voir", "recu", "envoy", "remis", "remp",
+                  "refai", "termi", "commen", "debut", "dernie", "derni", "depui", "quand"}
+DATE_TETE = re.compile(r"^\d{1,2}/\d{1,2}(/\d{2,4})? (\d{1,2}[:h]\d{2} )?")
+
+
+def cle_doublon(resume: str) -> str:
+    """Même texte à une autre date (cours de tous les jours…) = une seule ligne."""
+    return DATE_TETE.sub("", normaliser(resume))[:120]
+
+
+def nb_mots(texte: str, mots: list[str]) -> int:
+    t = set(re.findall(r"[a-z0-9]+", normaliser(texte)))
+    return sum(1 for m in mots if any(x.startswith(m) for x in t))
+
+
 class Memoire:
     def __init__(self, chemin: str):
         self.db = sqlite3.connect(chemin, check_same_thread=False)
@@ -122,10 +138,10 @@ class Memoire:
 
     # Ordre de priorité pour raconter une période : d'abord ce qui résume, ensuite le détail.
     PRIORITE_PERIODE = [
-        "archive/souvenir", "adria_souvenirs", "archive/episode", "adria_jarvis_episodes",
+        "papiers", "adria_savoir", "archive/souvenir", "adria_souvenirs", "archive/episode", "adria_jarvis_episodes",
         "archive/journal_interieur", "adria_journal_interieur", "archive/journal",
         "adria_journal", "archive/temoin", "archive/memoire_perso", "adria_memoire_perso",
-        "historique", "archive/observation", "adria_observations",
+        "agenda", "historique", "archive/observation", "adria_observations",
     ]
 
     def chercher_periode(self, debut: str, fin: str, mots: list[str], n: int,
@@ -150,7 +166,7 @@ class Memoire:
         vus: set[str] = set()
         res: list[dict] = []
         for r in lignes:
-            cle = normaliser(r["resume"])[:120]
+            cle = cle_doublon(r["resume"])
             if cle in vus:
                 continue
             vus.add(cle)
@@ -175,25 +191,33 @@ class Memoire:
                                         max(1, min(int(n), 20)), exclure_sources or [])
             if res:
                 return res
+        # verbes passe-partout (« changé », « fait », « allé »…) : ignorés s'il reste un vrai sujet
+        utiles = [m for m in mots if m not in VERBES_SOUPLES]
+        mots = utiles or mots
         if not mots:
             return []
-        requete = " OR ".join(f'"{m}"*' for m in mots)
         exclure = exclure_sources or []
         filtre = ""
         if exclure:
             filtre = " AND l.source NOT IN (%s)" % ",".join("?" * len(exclure))
-        lignes = self.db.execute(
-            "SELECT l.source, l.resume, l.detail, l.first_seen, l.date_evt, bm25(lignes_fts) AS score"
-            " FROM lignes_fts JOIN lignes l ON l.id = lignes_fts.rowid"
-            " WHERE lignes_fts MATCH ?" + filtre +
-            " ORDER BY score, COALESCE(l.date_evt, l.first_seen) DESC LIMIT ?",
-            (requete, *exclure, max(1, min(int(n), 20)) * 3),
-        ).fetchall()
+        sql = ("SELECT l.source, l.resume, l.detail, l.first_seen, l.date_evt, bm25(lignes_fts) AS score"
+               " FROM lignes_fts JOIN lignes l ON l.id = lignes_fts.rowid"
+               " WHERE lignes_fts MATCH ?" + filtre +
+               " ORDER BY score, COALESCE(l.date_evt, l.first_seen) DESC LIMIT ?")
+        limite = max(1, min(int(n), 20)) * 3
+        # P1 : d'abord les lignes qui contiennent TOUS les mots (« pneus » ET « changé ») ;
+        # sinon, à partir de 3 mots, celles qui en ont tous sauf un ; sinon rien (pas de réponse
+        # au hasard : ADRIA dira qu'elle n'a pas de trace).
+        lignes = self.db.execute(sql, (" AND ".join(f'"{m}"*' for m in mots), *exclure, limite)).fetchall()
+        if not lignes and len(mots) >= 3:
+            lignes = [r for r in self.db.execute(sql, (" OR ".join(f'"{m}"*' for m in mots), *exclure,
+                                                       limite * 5)).fetchall()
+                      if nb_mots(f"{r['resume']} {r['detail'] or ''}", mots) >= len(mots) - 1][:limite]
         # la même phrase peut venir d'une liste ET de l'archive : une seule fois
         vus: set[str] = set()
         res: list[dict] = []
         for r in lignes:
-            cle = normaliser(r["resume"])[:120]
+            cle = cle_doublon(r["resume"])
             if cle in vus:
                 continue
             vus.add(cle)
