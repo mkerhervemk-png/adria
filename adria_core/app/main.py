@@ -25,6 +25,7 @@ from formulaires import AgentFormulaires
 from memoire_agent import AgentMemoire
 from purge import LISTES as LISTES_PURGE, a_purger
 from routeur import Routeur
+from web import PageFormulaires
 from store import Memoire, lignes_historique, lire_archive
 
 LOG = logging.getLogger("adria_core")
@@ -33,7 +34,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 
 
 def lire_options() -> dict:
@@ -451,6 +452,10 @@ class Core:
             await asyncio.sleep(10)  # laisser Home Assistant finir de démarrer
             await self.publier_etat_ia()
             await self.publier_etat_formulaires()
+            try:
+                await PageFormulaires(self.formulaires, self).demarrer()
+            except Exception:
+                LOG.exception("Page formulaires")
             await self.synchroniser()
             await asyncio.gather(self.ecouter(), self.battement(), self.planifier(),
                                  self.planifier(self.heure_carnet, self.faire_carnet),

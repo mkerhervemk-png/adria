@@ -69,7 +69,7 @@ cd adria_core && python3 -m pytest tests
 ```
 
 ## Formulaires PDF (v0.6.0, lot F1)
-Interrupteur `input_boolean.adria_core_formulaires`. Déposer un PDF dans Médias > `adria_formulaires/entree`.
+Interrupteur `input_boolean.adria_core_formulaires`. Envoyer le PDF depuis la page « ADRIA Formulaires » du menu HA (Ingress, v0.6.1 ; les Médias HA refusent les PDF).
 Gemini Vision repère les champs ; profil de l'appli (onglet Configuration > `formulaire_profil`) + date du jour
 remplis seuls ; le reste est demandé par notification (boutons OUI/NON/Tout NON ou Répondre).
 Réponses gardées en mémoire vive uniquement (ni base, ni journaux). Résultat : `adria_formulaires/sortie`

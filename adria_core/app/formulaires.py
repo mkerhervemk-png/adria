@@ -27,8 +27,7 @@ LOG = logging.getLogger("adria_core.formulaires")
 DOSSIER = "/media/adria_formulaires"
 MEDIA_LOCAL = "media-source://media_source/local/adria_formulaires"
 URL_LOCAL = "/media/local/adria_formulaires"
-DOSSIER_UI = ("/media-browser/browser/app%2Cmedia-source%3A%2F%2Fmedia_source"
-              "/media-source%3A%2F%2Fmedia_source%2Flocal%2Fadria_formulaires%2Fsortie")
+PAGE_UI = "/hassio/ingress/0daf054b_adria_core"  # page « ADRIA Formulaires » (Ingress)
 MAX_PAGES = 4
 ATTENTE_REPONSE = 15 * 60  # s par question
 CLES_PROFIL = ("nom", "prenom", "naissance", "lieu_naissance", "adresse", "code_postal",
@@ -257,6 +256,7 @@ class AgentFormulaires:
             data["actions"] = actions
         if image:
             data["image"] = image
+            data["clickAction"] = PAGE_UI
         await self.ha.appel("POST", f"/services/{domaine}/{service}",
                             {"title": titre, "message": message, "data": data})
 
@@ -351,8 +351,8 @@ class AgentFormulaires:
                 f"✅ {titre} rempli",
                 f"{res['ecrits']} champs remplis"
                 + (f", {len(vides)} laissés vides ({', '.join(vides[:3])})" if vides else "")
-                + ". Signature à faire par toi. Médias > adria_formulaires > sortie > " + sortie + ".pdf",
-                [{"action": "URI", "title": "Voir le dossier", "uri": DOSSIER_UI}],
+                + ". Signature à faire par toi. PDF dans le menu HA > ADRIA Formulaires.",
+                [{"action": "URI", "title": "Ouvrir / télécharger", "uri": PAGE_UI}],
                 image=f"{URL_LOCAL}/sortie/{sortie}.png")
         except Exception as e:
             LOG.warning("Formulaire %s : %s", res["fichier"], type(e).__name__)
