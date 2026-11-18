@@ -20,7 +20,7 @@ DOSSIER_ONEDRIVE = "ADRIA/documents"
 INTERRUPTEUR = "input_boolean.adria_core_classement"
 CATEGORIES = {"ecole": "École", "sante": "Santé", "assurance": "Assurance", "impots": "Impôts",
               "banque": "Banque", "voiture": "Voiture", "maison": "Maison", "sport": "Sport",
-              "travail": "Travail", "autre": "Autre"}
+              "travail": "Travail", "facture": "Factures", "achat": "Achats", "autre": "Autre"}
 TEXTE_CATEGORIES = "|".join(CATEGORIES)
 
 

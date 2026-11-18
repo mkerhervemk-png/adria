@@ -41,7 +41,7 @@ NOM_PAPIER = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.+?)(?:_\d{1,2})?$")
 # Libellés lisibles des sources, pour que la réponse dise d'où vient l'information.
 LIBELLES = {
     "agenda": "agenda", "papiers": "papier classé", "adria_savoir": "fait retenu",
-    "historique": "historique maison", "adria_jarvis_episodes": "carnet du soir",
+    "historique": "historique maison", "suivis": "abonnements et garanties", "adria_jarvis_episodes": "carnet du soir",
     "archive/episode": "carnet du soir", "adria_journal": "journal", "archive/journal": "journal",
 }
 

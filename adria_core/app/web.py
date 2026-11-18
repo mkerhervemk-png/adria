@@ -14,6 +14,7 @@ from aiohttp import web
 
 import courriers as C
 import formulaires as F
+import retrouver as RT
 
 INGRESS_IP = "172.30.32.2"
 PORT = 8099
@@ -57,10 +58,12 @@ def lister_sorties(dossier: str, n: int = 15) -> list[str]:
 
 
 class PageFormulaires:
-    def __init__(self, agent: F.AgentFormulaires, ha, courriers: "C.AgentCourriers | None" = None) -> None:
+    def __init__(self, agent: F.AgentFormulaires, ha, courriers: "C.AgentCourriers | None" = None,
+                 retrouver: "RT.Retrouver | None" = None) -> None:
         self.agent = agent
         self.ha = ha
         self.courriers = courriers
+        self.retrouver = retrouver
 
     @web.middleware
     async def seulement_ha(self, request, handler):
@@ -71,8 +74,48 @@ class PageFormulaires:
     def application(self) -> web.Application:
         app = web.Application(client_max_size=25 * 1024 * 1024, middlewares=[self.seulement_ha])
         app.add_routes([web.get("/", self.accueil), web.post("/envoyer", self.envoyer),
-                        web.get("/fichier/{nom}", self.fichier)])
+                        web.get("/fichier/{nom}", self.fichier), web.get("/chercher", self.chercher),
+                        web.get("/doc", self.doc)])
         return app
+
+    @staticmethod
+    def carte_papier(d: dict) -> str:
+        from urllib.parse import quote
+        return (f"<div class=carte><b>📄 {html.escape(d['titre'])}</b><br><span class=gris>"
+                f"{html.escape(d['personne'])} · {html.escape(d['type'])} · {d['date'][8:10]}/{d['date'][5:7]}/"
+                f"{d['date'][:4]}</span><br><a class=bouton href='doc?c={quote(d['chemin'])}'>Ouvrir</a> "
+                f"<a class=bouton href='doc?c={quote(d['chemin'])}&t=1' download>Télécharger</a></div>")
+
+    def bloc_papiers(self, q: str = "", resultats: list | None = None) -> str:
+        if not self.retrouver:
+            return ""
+        corps = ("<h2>🔎 Retrouver un papier</h2><div class=carte><form method=get action=chercher>"
+                 f"<input name=q value='{html.escape(q, quote=True)}' placeholder='ex. attestation assurance Inster' "
+                 "style='width:100%;padding:12px;border-radius:10px;border:0;font-size:1em'>"
+                 "<button>Chercher</button></form></div>")
+        if resultats is not None:
+            corps += "".join(self.carte_papier(d) for d in resultats) or (
+                "<p class=gris>Aucun papier classé ne correspond (je n'en propose pas au hasard).</p>")
+        elif self.retrouver.dernier:
+            corps += "<p class=gris>Dernier papier demandé à la voix :</p>" + self.carte_papier(self.retrouver.dernier)
+        return corps
+
+    async def chercher(self, request) -> web.Response:
+        q = request.query.get("q", "")[:120]
+        if not self.retrouver or await self.ha.etat(RT.INTERRUPTEUR) != "on":
+            return page(self.bloc_papiers(q, []), "<p class=ko>Interrupteur « ADRIA Core papiers » éteint.</p>")
+        return page(self.bloc_papiers(q, RT.chercher(q)) + "<p><a class=bouton href='./'>Retour</a></p>")
+
+    async def doc(self, request) -> web.StreamResponse:
+        if not self.retrouver or await self.ha.etat(RT.INTERRUPTEUR) != "on":
+            raise web.HTTPNotFound()
+        chemin = RT.chemin_sur(request.query.get("c", ""))
+        if not chemin:
+            raise web.HTTPNotFound()
+        nom = os.path.basename(chemin)
+        mode = "attachment" if request.query.get("t") else "inline"
+        return web.FileResponse(chemin, headers={"Cache-Control": "no-store",
+                                                 "Content-Disposition": f'{mode}; filename="{nom}"'})
 
     async def accueil(self, request, message: str = "") -> web.Response:
         actif = await self.ha.etat("input_boolean.adria_core_formulaires") == "on"
@@ -106,8 +149,8 @@ class PageFormulaires:
         pour = (f"<p>Pour qui ? <select name=pour>{pour}</select> "
                 "<span class=gris>(formulaire)</span></p>") if len(self.agent.personnes) > 1 else ""
         modes = ("<p><label><input type=radio name=mode value=formulaire checked> 📝 Formulaire à remplir (PDF)</label><br>"
-                 "<label><input type=radio name=mode value=courrier> 📬 Courrier reçu (PDF ou photo) : "
-                 "échéances vers l'agenda</label></p>") if self.courriers else ""
+                 "<label><input type=radio name=mode value=courrier> 📬 Courrier, facture ou ticket de caisse "
+                 "(PDF ou photo) : échéances, abonnement, garantie</label></p>") if self.courriers else ""
         envoi = ("<div class=carte><form method=post action=envoyer enctype=multipart/form-data>"
                  f"{modes}{pour}<input type=file name=pdf accept='application/pdf,.pdf,image/*' required>"
                  "<button>Envoyer à ADRIA</button></form>"
@@ -126,7 +169,7 @@ class PageFormulaires:
                           f"{img}<br><a class=bouton href='fichier/{html.escape(f)}' download>"
                           "Télécharger le PDF</a></div>")
         liste = "<h2>Formulaires remplis</h2>" + ("".join(cartes) or "<p class=gris>Aucun pour l'instant.</p>")
-        return page(envoi + liste, message)
+        return page(self.bloc_papiers() + envoi + liste, message)
 
     async def envoyer(self, request) -> web.Response:
         lecteur = await request.multipart()

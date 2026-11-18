@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 
 import classement
 import formulaires as F
+import suivis as S
 
 LOG = logging.getLogger("adria_core.courriers")
 
@@ -42,7 +43,8 @@ PROMPT = (
     '"categorie": "' + classement.TEXTE_CATEGORIES + '", '
     '"pour": "prenom du destinataire parmi : {prenoms} ; vide si c est pour tout le foyer", '
     '"echeances": [ {{"date": "AAAA-MM-JJ", "heure": "HH:MM ou vide", '
-    '"action": "ce qu il faut faire a cette date, en 6 mots maximum"}} ]}}. '
+    '"action": "ce qu il faut faire a cette date, en 6 mots maximum"}} ], '
+    + S.TEXTE_PROMPT.replace("{", "{{").replace("}", "}}") + "}}. "
     "Une echeance = une date limite, un rendez-vous, une convocation, un prelevement ou une "
     "date de renouvellement QUI CONCERNE LE DESTINATAIRE. Ignore la date d envoi du courrier, "
     "les dates passees et les dates de mentions legales. Si l annee n est pas ecrite, prends la "
@@ -168,6 +170,8 @@ class AgentCourriers:
         self.en_cours: str | None = None
         self.attentes: dict[str, asyncio.Future] = {}
         self.dernier: dict | None = None
+        self.suivis: "S.Suivis | None" = None  # lots A4/A5, branché par le Core
+        self.apres_suivi = None  # rappel du Core pour republier sensor.adria_core_abonnements
 
     @staticmethod
     def dossier(*parties: str) -> str:
@@ -272,6 +276,46 @@ class AgentCourriers:
                 ajoutees += 1
         return ajoutees, total
 
+    # ---- lots A4/A5 : abonnement ou garantie à suivre (rien sans OUI)
+    async def suivre(self, brut: dict, pour: str, cl: dict | None) -> dict:
+        res: dict = {}
+        if self.suivis is None or not isinstance(brut, dict) or await self.ha.etat(S.INTERRUPTEUR) != "on":
+            return res
+        aujourdhui = date.today()
+        f = S.analyser_facture(brut.get("facture"))
+        if f:
+            jour = f["date_doc"] if f["date_doc"] and f["date_doc"] <= aujourdhui else aujourdhui
+            lignes = [S.libelle_facture(f)]
+            prec = self.suivis.precedente(f["cle"])
+            h = S.hausse(prec, f) if prec and prec["date_doc"] < jour else ""
+            if h:
+                lignes.append(h)
+                res["hausse"] = True
+            dbl = S.doublons(S.actifs(self.suivis.factures(), aujourdhui), f)
+            if dbl:
+                lignes.append(f"⚠️ Possible doublon : {', '.join(dbl)} aussi pour "
+                              f"{f['service'].replace('_', ' ')}.")
+                res["doublon"] = True
+            if f["fin_engagement"]:
+                lignes.append(f"Fin d'engagement le {f['fin_engagement'].strftime('%d/%m/%Y')} : "
+                              "rappel 30 jours avant.")
+            r = await self.demander("💶 Suivre cet abonnement ?", "\n".join(lignes),
+                                    [("OUI", "OUI"), ("NON", "NON")])
+            res["facture"] = "suivie" if r == "OUI" else "non"
+            if r == "OUI":
+                self.suivis.ajouter_facture(f, jour)
+        g = S.analyser_achat(brut.get("achat"), aujourdhui)
+        if g:
+            r = await self.demander("🛡️ Suivre la garantie ?",
+                                    S.libelle_garantie(g) + "\nRappel 30 jours avant la fin.",
+                                    [("OUI", "OUI"), ("NON", "NON")])
+            res["garantie"] = "suivie" if r == "OUI" else "non"
+            if r == "OUI":
+                self.suivis.ajouter_garantie(g, pour, cl["dossier"] if cl else "")
+        if ("suivie" in res.values()) and self.apres_suivi:
+            await self.apres_suivi()
+        return res
+
     # ---- un courrier de bout en bout
     async def traiter(self, chemin: str) -> dict:
         maintenant = datetime.now()
@@ -283,9 +327,10 @@ class AgentCourriers:
         res = {"fichier": os.path.basename(chemin), "debut": maintenant.isoformat(timespec="seconds"),
                "ok": False}
         self.en_cours = res["fichier"]
-        courrier = None
+        courrier = brut = None
         try:
-            courrier = analyser(await self.lire(travail, fichier, ident), maintenant.date())
+            brut = await self.lire(travail, fichier, ident)
+            courrier = analyser(brut, maintenant.date())
             res["echeances"] = len(courrier["echeances"])
             lignes = [courrier["objet"], courrier["resume"]]
             if not courrier["echeances"]:
@@ -302,6 +347,10 @@ class AgentCourriers:
                 res["classe"] = cl
                 lignes.append(f"Classé : {cl['dossier']}" + (" (+ OneDrive)." if cl["onedrive"] == "ok" else "."))
             await self.notifier_tel(f"📬 {courrier['expediteur']}", "\n".join(l for l in lignes if l))
+            try:
+                res.update(await self.suivre(brut, pour, cl))
+            except Exception as e:
+                LOG.warning("Suivi abonnement/garantie : %s", type(e).__name__)
             res["ajoutees"] = (await self.proposer(courrier))[0] if courrier["echeances"] else 0
             if res["ajoutees"]:
                 await self.notifier_tel(f"✅ {courrier['expediteur']}",
@@ -315,7 +364,7 @@ class AgentCourriers:
             except Exception:
                 pass
         finally:
-            courrier = None  # le résumé ne reste pas en mémoire
+            courrier = brut = None  # le résumé ne reste pas en mémoire
             self.en_cours = None
         faits = self.dossier("entree", "traites" if res["ok"] else "echecs")
         os.makedirs(faits, exist_ok=True)

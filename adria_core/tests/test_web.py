@@ -71,7 +71,7 @@ def test_envoi_courrier_photo(tmp_path, monkeypatch):
         port = site._server.sockets[0].getsockname()[1]
         base = f"http://127.0.0.1:{port}/"
         async with aiohttp.ClientSession() as s:
-            assert "Courrier reçu" in await (await s.get(base)).text()
+            assert "Courrier, facture ou ticket" in await (await s.get(base)).text()
             fd = aiohttp.FormData()
             fd.add_field("mode", "courrier")
             fd.add_field("pdf", b"\xff\xd8\xff\xe0 photo", filename="IMG_2026.jpeg", content_type="image/jpeg")
@@ -119,3 +119,30 @@ def test_envoi_pour_un_membre_du_foyer(tmp_path, monkeypatch):
     assert any(n.startswith("@Aelia@") and n != "@Aelia@fiche.pdf" for n in noms)  # pas d'écrasement
     assert sum(1 for n in noms if not n.startswith("@")) == 2  # 0 et 99 -> Mael
     assert all(F.PREFIXE_POUR.match(n) or not n.startswith("@") for n in noms)
+
+
+def test_retrouver_un_papier(tmp_path, monkeypatch):
+    import retrouver as RT
+    monkeypatch.setattr(F, "DOSSIER", str(tmp_path / "f"))
+    docs = tmp_path / "docs" / "Foyer" / "Assurance"
+    docs.mkdir(parents=True)
+    (docs / "2026-11-02_MAIF_Attestation_Inster.pdf").write_bytes(b"%PDF-1.4 att")
+    monkeypatch.setattr(RT, "RACINE", str(tmp_path / "docs"))
+    page = W.PageFormulaires(F.AgentFormulaires(FauxHA()), FauxHA(), None, RT.Retrouver(FauxHA(), None))
+
+    async def scenario():
+        runner = web.AppRunner(page.application())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}/"
+        async with aiohttp.ClientSession() as s:
+            assert "Retrouver un papier" in await (await s.get(base)).text()
+            t = await (await s.get(base + "chercher", params={"q": "attestation inster"})).text()
+            assert "MAIF Attestation Inster" in t and "doc?c=Foyer/Assurance/" in t
+            r = await s.get(base + "doc", params={"c": "Foyer/Assurance/2026-11-02_MAIF_Attestation_Inster.pdf"})
+            assert r.status == 200 and await r.read() == b"%PDF-1.4 att"
+            assert (await s.get(base + "doc", params={"c": "../../etc/passwd"})).status == 404
+        await runner.cleanup()
+
+    asyncio.run(scenario())

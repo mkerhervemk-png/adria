@@ -28,7 +28,9 @@ from consolidation import AgentConsolidation
 from memoire_agent import AgentMemoire
 from passe import AgentPasse, libelle
 from purge import LISTES as LISTES_PURGE, a_purger
+from retrouver import Retrouver
 from routeur import Routeur
+import suivis as S
 from web import PageFormulaires
 from store import Memoire, lignes_historique, lire_archive
 
@@ -38,7 +40,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 
 
 def lire_options() -> dict:
@@ -89,6 +91,10 @@ class Core:
             opts.get("courrier_calendrier") or "calendar.mael_adria",
             opts.get("onedrive_entree") or None)
         self.formulaires.autre = self.courriers
+        self.suivis = S.Suivis(self.memoire)  # lots A4/A5
+        self.courriers.suivis = self.suivis
+        self.courriers.apres_suivi = self.publier_suivis
+        self.retrouver = Retrouver(self, self.formulaires)  # lot A6
         self.habitudes = AgentHabitudes(
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.heure_habitudes: str = opts.get("habitudes_heure") or "17:30"
@@ -165,6 +171,38 @@ class Core:
                                "dernier": d or None, "dernier_courrier": c or None, "version": VERSION}})
         except Exception as e:
             LOG.warning("Etat formulaires non publié : %s", e)
+
+    async def publier_suivis(self) -> None:
+        try:
+            e = self.suivis.etat()
+            e["attributes"]["version"] = VERSION
+            await self.appel("POST", f"/states/{S.CAPTEUR}", e)
+        except Exception as e:
+            LOG.warning("Etat abonnements non publié : %s", e)
+
+    async def rappeler_suivis(self) -> None:
+        """Chaque jour à l'heure de rappel : fins d'engagement et de garantie à J-30."""
+        if await self.etat(S.INTERRUPTEUR) != "on":
+            return
+        msgs = S.rappels(self.suivis.factures(), self.suivis.garanties(), datetime.now().date())
+        if msgs:
+            domaine, service = self.courriers.notifier.split(".", 1)
+            await self.appel("POST", f"/services/{domaine}/{service}", {
+                "title": "📑 Abonnements et garanties", "message": "\n".join(msgs),
+                "data": {"tag": "adria_suivis", "channel": "ADRIA courriers"}})
+        await self.publier_suivis()
+
+    async def papier(self, data: dict) -> None:
+        """Lot A6 : « sors-moi le papier » (voix)."""
+        try:
+            res = await self.retrouver.demander(data)
+        except Exception as e:
+            LOG.warning("Papier : %s", type(e).__name__)
+            res = {"req_id": data.get("req_id", ""), "ok": False, "texte": "Je n'ai pas pu chercher le papier."}
+        try:
+            await self.appel("POST", "/events/adria_core_papier_resultat", res)
+        except Exception:
+            pass
 
     async def ollama(self, prompt: str) -> str:
         assert self.session is not None
@@ -467,7 +505,7 @@ class Core:
                     for i, evt in enumerate(("adria_core_recherche", "adria_core_synchroniser",
                                              "adria_core_ia", "adria_core_carnet",
                                              "adria_core_purge", "adria_core_habitudes",
-                                             "adria_core_consolider",
+                                             "adria_core_consolider", "adria_core_papier",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -489,6 +527,8 @@ class Core:
                             asyncio.create_task(self.purger(e.get("data", {})))
                         elif e["event_type"] == "adria_core_consolider":
                             asyncio.create_task(self.consolider(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_papier":
+                            asyncio.create_task(self.papier(e.get("data", {})))
                         elif e["event_type"] == "adria_core_habitudes":
                             asyncio.create_task(self.habitudes_dimanche(e.get("data", {})))
                         elif e["event_type"] == "mobile_app_notification_action":
@@ -523,8 +563,9 @@ class Core:
             await asyncio.sleep(10)  # laisser Home Assistant finir de démarrer
             await self.publier_etat_ia()
             await self.publier_etat_formulaires()
+            await self.publier_suivis()
             try:
-                await PageFormulaires(self.formulaires, self, self.courriers).demarrer()
+                await PageFormulaires(self.formulaires, self, self.courriers, self.retrouver).demarrer()
             except Exception:
                 LOG.exception("Page formulaires")
             await self.synchroniser()
@@ -538,6 +579,7 @@ class Core:
                                  self.planifier(self.heure_consolidation, self.consolider),
                                  self.formulaires.surveiller(), self.courriers.surveiller(),
                                  self.planifier(self.heure_rappel, self.courriers.rappeler),
+                                 self.planifier(self.heure_rappel, self.rappeler_suivis),
                                  self.planifier(self.heure_habitudes, self.habitudes_dimanche))
 
 
