@@ -21,6 +21,7 @@ MOTS_VIDES = {
     "ete", "dis", "donne", "sais", "sait", "avait", "avais", "avions", "deja",
     "souviens", "rappelle", "rappelles", "hier", "jour", "fois", "raconte", "racontes",
     "passe", "passee", "passes", "derniere", "dernier", "semaine", "mois",
+    "dit", "dire", "quoi", "qu'est",
 }
 
 

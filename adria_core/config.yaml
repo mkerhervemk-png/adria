@@ -1,7 +1,7 @@
 name: ADRIA Core
-version: "0.9.0"
+version: "0.10.0"
 slug: adria_core
-description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances, classement des papiers.
+description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances, classement des papiers, « Mon passé ».
 arch:
   - amd64
 init: false

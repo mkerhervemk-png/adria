@@ -24,6 +24,7 @@ import aiohttp
 from courriers import AgentCourriers
 from formulaires import AgentFormulaires
 from memoire_agent import AgentMemoire
+from passe import AgentPasse, libelle
 from purge import LISTES as LISTES_PURGE, a_purger
 from routeur import Routeur
 from web import PageFormulaires
@@ -35,7 +36,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 
 
 def lire_options() -> dict:
@@ -71,6 +72,7 @@ class Core:
         self.memoire = Memoire(BASE)
         self.routeur = Routeur(self)
         self.agent_memoire = AgentMemoire(self)
+        self.passe = AgentPasse(self)
         self.heure_carnet: str = opts.get("heure_carnet") or "23:40"
         self.formulaires = AgentFormulaires(
             self, opts.get("formulaire_profil") or {},
@@ -256,6 +258,12 @@ class Core:
             nouvelles += await self.importer_historique()
         except Exception as e:
             erreurs.append(f"historique: {e}")
+        try:
+            p = await self.passe.importer()
+            nouvelles += sum(p.get("nouvelles", {}).values())
+            erreurs += p.get("erreurs", [])
+        except Exception as e:
+            erreurs.append(f"passe: {e}")
         self.derniere_sync = datetime.now().isoformat(timespec="seconds")
         self.derniere_erreur = "; ".join(erreurs)[:250] or None
         LOG.info("Synchronisation : %s lignes nouvelles, %s erreurs", nouvelles, len(erreurs))
@@ -363,6 +371,7 @@ class Core:
                     "derniere_erreur": self.derniere_erreur,
                     "dernier_carnet": self.agent_memoire.dernier or None,
                     "derniere_purge": self.derniere_purge,
+                    "dernier_passe": self.passe.dernier,
                     "version": VERSION,
                 },
             })
@@ -377,8 +386,10 @@ class Core:
                 int(data.get("n", 5)),
                 data.get("exclure_sources") or [],
             )
+            for l in lignes:
+                l["origine"] = libelle(l["source"])
             texte = " ; ".join(
-                f"[{(l['date'] + ' ') if l['date'] else ''}{l['source']}] {l['texte']}" for l in lignes)
+                f"[{(l['date'] + ' ') if l['date'] else ''}{l['origine']}] {l['texte']}" for l in lignes)
             resultat = {"req_id": req_id, "ok": True, "lignes": lignes, "texte": texte[:2000]}
         except Exception as e:
             resultat = {"req_id": req_id, "ok": False, "lignes": [], "texte": "", "erreur": str(e)[:200]}
