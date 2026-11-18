@@ -21,7 +21,11 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+import budget as B
 from courriers import AgentCourriers
+from devoirs import AgentDevoirs
+from general import AgentGeneral
+from menus import AgentMenus
 from formulaires import AgentFormulaires
 from habitudes import AgentHabitudes
 from consolidation import AgentConsolidation
@@ -42,7 +46,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 
 
 def lire_options() -> dict:
@@ -101,6 +105,12 @@ class Core:
         self.journal = AgentJournal(self, notif)  # lot J1
         self.heure_journal: str = opts.get("journal_heure") or "17:45"
         self.competences = AgentCompetences(self, notif)  # lot C1
+        self.budget = B.Budget(self.memoire)  # lot B1
+        self.courriers.budget = self.budget
+        self.courriers.apres_budget = self.publier_budget
+        self.menus = AgentMenus(self, notif)  # lot M1
+        self.devoirs = AgentDevoirs(self, notif)  # lot N1
+        self.general = AgentGeneral(self, notif)  # lot G1
         self.habitudes = AgentHabitudes(
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.heure_habitudes: str = opts.get("habitudes_heure") or "17:30"
@@ -197,6 +207,68 @@ class Core:
                 "title": "📑 Abonnements et garanties", "message": "\n".join(msgs),
                 "data": {"tag": "adria_suivis", "channel": "ADRIA courriers"}})
         await self.publier_suivis()
+
+    # --- lot B1 budget --------------------------------------------------------------
+    def abonnements_mois(self) -> float:
+        try:
+            return float(self.suivis.etat()["state"])
+        except Exception:
+            return 0.0
+
+    async def publier_budget(self) -> None:
+        try:
+            e = self.budget.etat(self.abonnements_mois())
+            e["attributes"]["version"] = VERSION
+            await self.appel("POST", f"/states/{B.CAPTEUR}", e)
+        except Exception as e:
+            LOG.warning("Etat budget non publié : %s", e)
+
+    async def budget_quotidien(self) -> None:
+        """10h : alertes de dépassement ; le 1er du mois, bilan du mois écoulé."""
+        if await self.etat(B.INTERRUPTEUR) != "on":
+            return
+        auj = datetime.now().date()
+        dep = self.budget.depenses()
+        domaine, service = self.courriers.notifier.split(".", 1)
+        msgs = []
+        if auj.day == 1:
+            a, m = B.mois_suivant(auj.year, auj.month, -1)
+            await self.appel("POST", f"/services/{domaine}/{service}", {
+                "title": f"💶 Bilan de {B.libelle_mois(a, m)}",
+                "message": B.bilan(dep, self.abonnements_mois(), a, m),
+                "data": {"tag": "adria_budget_bilan", "channel": "ADRIA courriers"}})
+        try:
+            deja = set(json.loads(self.memoire.meta("budget_alertes") or "[]"))
+        except ValueError:
+            deja = set()
+        for cle, msg in B.alertes(dep, auj, deja):
+            deja.add(cle)
+            msgs.append(msg)
+        if msgs:
+            self.memoire.meta("budget_alertes", json.dumps(sorted(deja)))
+            await self.appel("POST", f"/services/{domaine}/{service}", {
+                "title": "💶 Budget du mois", "message": "\n".join(msgs),
+                "data": {"tag": "adria_budget", "channel": "ADRIA courriers"}})
+        await self.publier_budget()
+
+    async def budget_voix(self, data: dict) -> dict:
+        res = {"req_id": data.get("req_id", ""), "ok": True}
+        if await self.etat(B.INTERRUPTEUR) != "on":
+            res["texte"] = "Le suivi du budget est éteint."
+            return res
+        q = str(data.get("question") or "")
+        d = B.depense_vocale(q, datetime.now().date())
+        if d:
+            qui = str(data.get("qui") or "")
+            if self.budget.ajouter(d, qui, "voix"):
+                res["texte"] = (f"C'est noté : {B.euros(d['montant'])} en {B.LIBELLES[d['categorie']]}"
+                                + (f" chez {d['magasin']}" if d["magasin"] else "") + ".")
+                await self.publier_budget()
+            else:
+                res["texte"] = "Cette dépense était déjà notée."
+            return res
+        res["texte"] = B.repondre(q, self.budget.depenses(), self.abonnements_mois(), datetime.now().date())
+        return res
 
     async def ws_commande(self, message: dict):
         """Une commande WebSocket ponctuelle (registre des entités…), sur une connexion à part."""
@@ -325,6 +397,10 @@ class Core:
                 await self.habitudes.minute()
             except Exception as e:
                 LOG.warning("Rappels d'habitude : %s", str(e)[:150])
+            try:
+                await self.general.minute()
+            except Exception as e:
+                LOG.warning("Rappels G1 : %s", str(e)[:150])
             await asyncio.sleep(60)
 
     async def synchroniser(self) -> None:
@@ -548,6 +624,8 @@ class Core:
                                              "adria_core_consolider", "adria_core_papier",
                                              "adria_core_souvenir", "adria_core_livre", "adria_core_journal",
                                              "adria_core_apprendre", "adria_core_competences_couper",
+                                             "adria_core_general", "adria_core_budget", "adria_core_menus",
+                                             "adria_core_devoirs",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -581,6 +659,22 @@ class Core:
                             d = e.get("data", {})
                             asyncio.create_task(self.repondre_evenement(
                                 "adria_core_apprendre_resultat", self.competences.apprendre(d)))
+                        elif e["event_type"] == "adria_core_general":
+                            d = e.get("data", {})
+                            if str(d.get("asynchrone")).lower() == "true":
+                                asyncio.create_task(self.general.secours(d))
+                            else:
+                                asyncio.create_task(self.repondre_evenement(
+                                    "adria_core_general_resultat", self.general.repondre(d)))
+                        elif e["event_type"] == "adria_core_budget":
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_budget_resultat", self.budget_voix(e.get("data", {}))))
+                        elif e["event_type"] == "adria_core_menus":
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_menus_resultat", self.menus.voix(e.get("data", {}))))
+                        elif e["event_type"] == "adria_core_devoirs":
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_devoirs_resultat", self.devoirs.aider(e.get("data", {}))))
                         elif e["event_type"] == "adria_core_competences_couper":
                             asyncio.create_task(self.competences.couper_tout())
                         elif e["event_type"] == "adria_core_papier":
@@ -593,6 +687,8 @@ class Core:
                             self.courriers.recevoir_action(e.get("data", {}))
                             self.journal.recevoir_action(e.get("data", {}))
                             asyncio.create_task(self.competences.recevoir_action(e.get("data", {})))
+                            asyncio.create_task(self.menus.recevoir_action(e.get("data", {})))
+                            asyncio.create_task(self.general.recevoir_action(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -622,6 +718,8 @@ class Core:
             await self.publier_etat_ia()
             await self.publier_etat_formulaires()
             await self.publier_suivis()
+            await self.publier_budget()
+            await self.devoirs.publier()
             try:
                 await PageFormulaires(self.formulaires, self, self.courriers, self.retrouver).demarrer()
             except Exception:
@@ -640,7 +738,11 @@ class Core:
                                  self.planifier(self.heure_rappel, self.rappeler_suivis),
                                  self.planifier(self.heure_journal, self.journal_dimanche),
                                  self.planifier("10:05", self.journal.livre_si_15_decembre),
-                                 self.planifier(self.heure_habitudes, self.habitudes_dimanche))
+                                 self.planifier(self.heure_habitudes, self.habitudes_dimanche),
+                                 self.planifier("10:02", self.budget_quotidien),
+                                 self.planifier("17:15", self.menus.proposer),
+                                 self.planifier("16:30", self.menus.ce_soir),
+                                 self.planifier("19:15", self.devoirs.bilan_soir))
 
 
 if __name__ == "__main__":

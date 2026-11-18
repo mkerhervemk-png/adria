@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 
 import classement
 import formulaires as F
+import budget as B
 import suivis as S
 
 LOG = logging.getLogger("adria_core.courriers")
@@ -44,7 +45,8 @@ PROMPT = (
     '"pour": "prenom du destinataire parmi : {prenoms} ; vide si c est pour tout le foyer", '
     '"echeances": [ {{"date": "AAAA-MM-JJ", "heure": "HH:MM ou vide", '
     '"action": "ce qu il faut faire a cette date, en 6 mots maximum"}} ], '
-    + S.TEXTE_PROMPT.replace("{", "{{").replace("}", "}}") + "}}. "
+    + S.TEXTE_PROMPT.replace("{", "{{").replace("}", "}}") + ", "
+    + B.TEXTE_PROMPT.replace("{", "{{").replace("}", "}}") + "}}. "
     "Une echeance = une date limite, un rendez-vous, une convocation, un prelevement ou une "
     "date de renouvellement QUI CONCERNE LE DESTINATAIRE. Ignore la date d envoi du courrier, "
     "les dates passees et les dates de mentions legales. Si l annee n est pas ecrite, prends la "
@@ -172,6 +174,8 @@ class AgentCourriers:
         self.dernier: dict | None = None
         self.suivis: "S.Suivis | None" = None  # lots A4/A5, branché par le Core
         self.apres_suivi = None  # rappel du Core pour republier sensor.adria_core_abonnements
+        self.budget: "B.Budget | None" = None  # lot B1, branché par le Core
+        self.apres_budget = None
 
     @staticmethod
     def dossier(*parties: str) -> str:
@@ -277,8 +281,27 @@ class AgentCourriers:
         return ajoutees, total
 
     # ---- lots A4/A5 : abonnement ou garantie à suivre (rien sans OUI)
+    async def compter_budget(self, brut: dict, pour: str) -> dict:
+        """Lot B1 : ticket ou facture payée (hors abonnement) -> dépense comptée, signalée par notification."""
+        if (self.budget is None or not isinstance(brut, dict) or S.analyser_facture(brut.get("facture"))
+                or await self.ha.etat(B.INTERRUPTEUR) != "on"):
+            return {}
+        d = B.analyser_depense(brut.get("depense"), date.today())
+        if not d or not self.budget.ajouter(d, pour, "courrier"):
+            return {}
+        await self.notifier_tel("💶 Budget", f"Compté : {B.euros(d['montant'])} en {B.LIBELLES[d['categorie']]}"
+                                + (f" ({d['magasin']})" if d["magasin"] else "")
+                                + f" le {d['jour'].strftime('%d/%m')}.")
+        if self.apres_budget:
+            await self.apres_budget()
+        return {"budget": d["montant"]}
+
     async def suivre(self, brut: dict, pour: str, cl: dict | None) -> dict:
         res: dict = {}
+        try:
+            res.update(await self.compter_budget(brut, pour))
+        except Exception as e:
+            LOG.warning("Budget : %s", type(e).__name__)
         if self.suivis is None or not isinstance(brut, dict) or await self.ha.etat(S.INTERRUPTEUR) != "on":
             return res
         aujourdhui = date.today()
