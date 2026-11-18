@@ -243,3 +243,22 @@ def test_general_inconnu_limite_et_rappel(tmp_path):
     assert asyncio.run(ag.minute(datetime(2026, 11, 18, 9, 29))) == 0
     assert asyncio.run(ag.minute(datetime(2026, 11, 18, 9, 30))) == 1
     assert asyncio.run(ag.minute(datetime(2026, 11, 18, 9, 31))) == 0
+
+
+def test_general_voix_chaine_interactive_et_secours(tmp_path, monkeypatch):
+    rep = json.dumps({"reponse_orale": "Paris est la capitale de la France."})
+    core = _core_general(tmp_path, [rep])
+    core.prof = []
+    vrai = core.routeur.demander
+
+    async def espion(prompt, profondeur="rapide", tache="adria", *a, **k):
+        core.prof.append(profondeur)
+        return await vrai(prompt, profondeur, tache)
+    core.routeur.demander = espion
+    monkeypatch.setattr(G, "SECOURS_ATTENTE", 0)
+    ag = G.AgentGeneral(core, "notify.mobile_app_x")
+    asyncio.run(ag.secours({"question": "capitale de la France", "qui": "vanessa", "voix": "True",
+                            "echo": "media_player.echo_salon", "asynchrone": True}))
+    assert core.prof == ["interactif"]
+    dit = [d for c, d in core.appels if c == "/services/script/adria_dire"]
+    assert dit and dit[0]["message"].startswith("J'ai cherché plus loin. Paris")

@@ -13,6 +13,7 @@ quelqu'un de la maison. Notification OUI / NON à Mael ; rien sans OUI (et jamai
 Limite : 30 questions par jour. Actif si input_boolean.adria_core_general est ON.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -25,6 +26,7 @@ LOG = logging.getLogger("adria_core.general")
 
 INTERRUPTEUR = "input_boolean.adria_core_general"
 MAX_JOUR = 30
+SECOURS_ATTENTE = 12
 ADULTES = {"mael", "vanessa"}
 FOYER = {"mael", "vanessa", "ryan", "iwan", "aelia"}
 SOURCES_ENFANT = ("adria_souvenirs", "adria_jarvis_episodes", "adria_journal_interieur", "souvenirs_famille",
@@ -36,7 +38,9 @@ PROMPT = (
     "Reponds a la demande en t appuyant d abord sur le CONTEXTE de la maison ci-dessous ; pour le reste, "
     "utilise tes connaissances generales. N invente jamais un fait sur la maison ou la famille : s il "
     "n est pas dans le CONTEXTE, dis que tu ne le sais pas. Argent, sante, droit : donne des informations "
-    "factuelles et dis quand il vaut mieux demander a un professionnel. Pour un texte a rediger (lettre, "
+    "factuelles et dis quand il vaut mieux demander a un professionnel. Tutoie toujours la personne. "
+    "Si tu fais une proposition, ne demande pas dans la reponse si elle la veut : dis simplement ce que tu "
+    "proposes (elle recevra un bouton OUI). Pour un texte a rediger (lettre, "
     "mail, message), ecris-le en entier dans reponse_detaillee. {consigne_enfant}"
     "Si une action concrete aiderait (ajouter des courses, un rappel, un rendez-vous dans l agenda, un memo "
     "a quelqu un de la maison), PROPOSE-LA dans proposition (elle ne sera faite qu apres le OUI de Mael) ; "
@@ -200,7 +204,9 @@ class AgentGeneral:
             consigne_enfant=("Tu parles a un enfant : langage simple, bienveillant, jamais d argent, de securite "
                              "ni de reglages de la maison, aucune proposition (proposition = null). ") if enfant else "",
             contexte=await self.contexte(q, "enfant" if enfant else p), question=q)
-        rep = await self.core.routeur.demander(prompt, "profond", "adria_core_general")
+        # à la voix : chaîne rapide (réponse en moins de 20 s) ; au téléphone : chaîne profonde
+        voix = str(data.get("voix")).lower() == "true"
+        rep = await self.core.routeur.demander(prompt, "interactif" if voix else "profond", "adria_core_general")
         if not rep.get("ok"):
             res["texte"] = "Je n'arrive pas à réfléchir pour l'instant, mes IA ne répondent pas. Réessaie plus tard."
             return res
@@ -222,7 +228,8 @@ class AgentGeneral:
                                     f"{libelle_proposition(prop)}\nJe le fais ?",
                                     [{"action": f"ADRIA_GEN_{ident}_OUI", "title": "OUI"},
                                      {"action": f"ADRIA_GEN_{ident}_NON", "title": "NON"}], tag=f"adria_gen_{ident}")
-            res["texte"] = orale + " Je t'ai envoyé une proposition sur le téléphone de Mael."
+            res["texte"] = orale + (" Je t'ai envoyé la proposition sur ton téléphone." if p == "mael"
+                                    else " J'ai envoyé la proposition sur le téléphone de Mael.")
             res["proposition"] = libelle_proposition(prop)
         if detail and len(detail) > len(orale) + 40 and not enfant:
             await self.notifier_tel(f"🧠 ADRIA — {nettoyer(q, 60)}", detail
@@ -236,6 +243,7 @@ class AgentGeneral:
         res = await self.repondre(data)
         if not res.get("ok"):
             return
+        await asyncio.sleep(SECOURS_ATTENTE)  # laisser ADRIA finir de dire « je ne sais pas »
         echo = str(data.get("echo") or "")
         texte = "J'ai cherché plus loin. " + res["texte"]
         if str(data.get("voix")).lower() == "true" and echo.startswith("media_player."):
