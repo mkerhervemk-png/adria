@@ -100,16 +100,66 @@ def _meme_ligne(a0, a1, b0, b1, marge=3.0) -> bool:
     return min(a1, b1) - max(a0, b0) > -marge
 
 
-def caler_texte(boite, mots: list[dict]) -> dict:
-    """Où écrire dans la zone : sur les pointillés s'il y en a, sinon après le libellé."""
+def _sans_accent(t: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", t.lower()) if unicodedata.category(c) != "Mn")
+
+
+def trouver_libelle(libelle: str, boite, mots: list[dict]):
+    """Retrouve le libellé du champ dans le texte du PDF (le plus proche de la zone Gemini).
+    Rend la liste des mots du libellé sur sa ligne, ou None."""
+    cles = [w for w in re.findall(r"[\w']+", _sans_accent(libelle)) if len(w) > 1][:4]
+    if not cles:
+        return None
     x0, y0, x1, y1 = boite
-    lignes = [m for m in mots if LEADER.match(m["texte"]) and _meme_ligne(m["y0"], m["y1"], y0, y1)
-              and m["x1"] > x0 - 5 and m["x0"] < x1 + 5]
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    meilleur, dist = None, 1e9
+    for i, m in enumerate(mots):
+        if _sans_accent(m["texte"]).strip(" :.") != cles[0]:
+            continue
+        suite, j = [m], i
+        for c in cles[1:]:
+            j += 1
+            if j < len(mots) and _sans_accent(mots[j]["texte"]).strip(" :.") == c and abs(mots[j]["y0"] - m["y0"]) < 3:
+                suite.append(mots[j])
+        # « : » collé ou séparé juste après
+        if j + 1 < len(mots) and mots[j + 1]["texte"].strip() == ":" and abs(mots[j + 1]["y0"] - m["y0"]) < 3:
+            suite.append(mots[j + 1])
+        d = abs((m["y0"] + m["y1"]) / 2 - cy) * 2 + abs(m["x0"] - cx) * 0.5
+        if d < dist and abs((m["y0"] + m["y1"]) / 2 - cy) < 80:
+            meilleur, dist = suite, d
+    return meilleur
+
+
+def _pointilles(mots, y0, y1, xmin, xmax):
+    return [m for m in mots if LEADER.match(m["texte"]) and _meme_ligne(m["y0"], m["y1"], y0, y1)
+            and m["x1"] > xmin and m["x0"] < xmax]
+
+
+def _sur_pointilles(lignes):
+    g = min(lignes, key=lambda m: m["x0"])
+    d = max(m["x1"] for m in lignes if abs(m["y0"] - g["y0"]) < 3)
+    return {"x": g["x0"] + 1, "base": g["y1"] - 1.5, "largeur": max(d - g["x0"], 30),
+            "masque": (g["x0"] - 1, g["y0"] - 1, d + 1, g["y1"] + 1)}
+
+
+def caler_texte(boite, mots: list[dict], libelle: str = "") -> dict:
+    """Où écrire : 1) pointillés dans la zone, 2) juste après le libellé retrouvé dans le PDF
+    (sur ses pointillés s'il y en a), 3) après le mot qui précède la zone, 4) zone Gemini brute."""
+    x0, y0, x1, y1 = boite
+    lignes = _pointilles(mots, y0, y1, x0 - 5, x1 + 5)
     if lignes:
-        g = min(lignes, key=lambda m: m["x0"])
-        d = max(m["x1"] for m in lignes if abs(m["y0"] - g["y0"]) < 3)
-        return {"x": g["x0"] + 1, "base": g["y1"] - 1.5, "largeur": max(d - g["x0"], 30),
-                "masque": (g["x0"] - 1, g["y0"] - 1, d + 1, g["y1"] + 1)}
+        return _sur_pointilles(lignes)
+    lib = trouver_libelle(libelle, boite, mots) if libelle else None
+    if lib:
+        fin = max(m["x1"] for m in lib)
+        ly0, ly1 = lib[0]["y0"], lib[0]["y1"]
+        lignes = _pointilles(mots, ly0, ly1, fin - 2, fin + 400)
+        if lignes:
+            return _sur_pointilles(lignes)
+        apres = [m["x0"] for m in mots if _meme_ligne(m["y0"], m["y1"], ly0, ly1, 1) and m["x0"] > fin + 2]
+        limite = min(apres) - 4 if apres else (lib[0]["w"] or 595) - 20
+        return {"x": fin + 4, "base": ly1 - 1.5, "largeur": max(limite - fin - 4, 30), "masque": None}
     avant = [m for m in mots if m["x1"] <= x0 + 12 and m["x1"] > x0 - 120
              and _meme_ligne(m["y0"], m["y1"], y0, y1, 1) and not LEADER.match(m["texte"])]
     if avant:
@@ -172,7 +222,7 @@ def normaliser(champs_bruts: list, page: int, mots: list[dict], largeur: float, 
             if typ == "case":
                 champ["centre"] = centre_case(b, mp)
             else:
-                champ.update(caler_texte(b, mp))
+                champ.update(caler_texte(b, mp, champ["libelle"]))
         sortie.append(champ)
     return sortie
 

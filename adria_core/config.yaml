@@ -1,5 +1,5 @@
 name: ADRIA Core
-version: "0.6.1"
+version: "0.6.2"
 slug: adria_core
 description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF.
 arch:

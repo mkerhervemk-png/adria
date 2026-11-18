@@ -66,6 +66,18 @@ def test_placement_irm():
     assert taille["x"] > 474 and abs(taille["base"] - 427.5) < 3  # après « Taille : », même ligne
 
 
+def test_zones_gemini_sous_le_libelle():
+    """Cas réel du 18/11 : Gemini a donné pour Taille ET Poids une zone sous « Taille »."""
+    zone = [513, 754, 528, 800]  # sous « Taille : » (y≈432-443, x≈449-476)
+    champs = F.normaliser([
+        {"libelle": "Taille", "type": "texte", "cle": "autre", "zone": zone},
+        {"libelle": "Poids", "type": "texte", "cle": "autre", "zone": zone},
+    ], 1, mots(), L, H)
+    t, p = champs
+    assert t["x"] > 474 and abs(t["base"] - 427.5) < 3   # sur la ligne de « Taille : »
+    assert p["x"] > 472 and abs(p["base"] - 466) < 3     # sur la ligne de « Poids : »
+
+
 def test_traiter_bout_en_bout(tmp_path, monkeypatch):
     monkeypatch.setattr(F, "DOSSIER", str(tmp_path))
     monkeypatch.setattr(F, "ATTENTE_REPONSE", 2)
