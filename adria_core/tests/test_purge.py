@@ -44,8 +44,8 @@ def test_memoire_calendrier_obs_passes():
              {"uid": "b", "summary": "[obs] 18/11 aujourd'hui"},
              {"uid": "c", "summary": "[savoir] 01/01 garde"},
              {"uid": "d", "summary": "[calendrier] 05/01 à venir"}]
-    # identique à O12 : une date de janvier vue en novembre est lue comme passée (défaut connu, signalé)
-    assert {i["uid"] for i in a_purger("todo.adria_memoire", items, NOW)} == {"a", "d"}
+    # 18/11 corrigé : une date de janvier vue en novembre = janvier prochain, pas purgée
+    assert {i["uid"] for i in a_purger("todo.adria_memoire", items, NOW)} == {"a"}
 
 
 def test_15_jours_et_dates():

@@ -37,7 +37,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.11.1"
+VERSION = "0.11.2"
 
 
 def lire_options() -> dict:
@@ -227,6 +227,7 @@ class Core:
                     "icon": "mdi:lan",
                     "moteurs_24h": self.memoire.stats_ia(86400),
                     "moteurs_7j": self.memoire.stats_ia(7 * 86400),
+                    "par_profondeur_24h": self.memoire.stats_ia_profondeur(86400),
                     "coupe_circuit": self.routeur.cc.etat(),
                     "battement": datetime.now().isoformat(timespec="seconds"),
                     "version": VERSION,

@@ -8,6 +8,7 @@ les heures réelles de présence tirées de l'historique du Core.
 Rien n'est jamais effacé du Core.
 """
 
+import json
 import re
 from datetime import date, datetime
 
@@ -90,7 +91,10 @@ class AgentMemoire:
 
     def __init__(self, core):
         self.core = core
-        self.dernier: dict = {}
+        try:  # 18/11 : le dernier carnet survit aux redémarrages du Core
+            self.dernier: dict = json.loads(core.memoire.meta("dernier_carnet") or "{}")
+        except Exception:
+            self.dernier = {}
 
     async def liste(self, entite: str) -> list[dict]:
         try:
@@ -165,4 +169,9 @@ class AgentMemoire:
                 self.core.memoire.ajouter("adria_journal_interieur",
                                           [{"summary": r, "date": jour.isoformat()}])
         self.dernier = res
+        if not essai:
+            try:
+                self.core.memoire.meta("dernier_carnet", json.dumps(res, ensure_ascii=False))
+            except Exception:
+                pass
         return res

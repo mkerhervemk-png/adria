@@ -115,7 +115,10 @@ def purge_memoire(items: list[dict], maintenant: datetime) -> list[dict]:
             continue
         try:
             d = auj.replace(month=int(m.group(2)), day=int(m.group(1)))
-            if d > auj + timedelta(days=120):
+            # 18/11 : année la plus proche d'aujourd'hui (un 05/01 vu en novembre = janvier prochain)
+            if d < auj - timedelta(days=182):
+                d = d.replace(year=d.year + 1)
+            elif d > auj + timedelta(days=182):
                 d = d.replace(year=d.year - 1)
         except ValueError:
             continue

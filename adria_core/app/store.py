@@ -249,6 +249,21 @@ class Memoire:
                          "moy_s": round(r[3], 1) if r[3] is not None else None}
         return res
 
+    def stats_ia_profondeur(self, depuis_s: float = 86400, maintenant: float | None = None) -> dict:
+        """18/11 : temps moyen par moteur ET par profondeur (voix « interactif » vs fond)."""
+        import time
+        t0 = (maintenant or time.time()) - depuis_s
+        res: dict = {}
+        for r in self.db.execute(
+            "SELECT profondeur, moteur, COUNT(*), SUM(ok), AVG(CASE WHEN ok = 1 THEN duree END),"
+            " MAX(CASE WHEN ok = 1 THEN duree END) FROM ia_stats WHERE quand >= ?"
+            " GROUP BY profondeur, moteur", (t0,)):
+            res.setdefault(r[0] or "?", {})[r[1]] = {
+                "appels": r[2], "ok": r[3] or 0,
+                "moy_s": round(r[4], 1) if r[4] is not None else None,
+                "max_s": round(r[5], 1) if r[5] is not None else None}
+        return res
+
     def stats(self) -> dict:
         total = self.db.execute("SELECT COUNT(*) FROM lignes").fetchone()[0]
         par_source = {
