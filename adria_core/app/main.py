@@ -14,6 +14,7 @@ import glob
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -31,7 +32,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 
 def lire_options() -> dict:
@@ -214,22 +215,27 @@ class Core:
         if await self.etat("input_boolean.adria_core_purge") == "on":
             await self.purger()
 
+    def _choisir(self, liste: str, source: str, items: list[dict], maintenant: datetime):
+        self.memoire.ajouter(source, items)  # recopie juste avant : rien ne se perd
+        choix = a_purger(liste, items, maintenant)
+        return [i for i in choix if i.get("uid") and self.memoire.a_la_copie(source, i)], choix
+
     async def purger(self, data: dict | None = None) -> dict:
         """Lot M2b-1. Retire des listes HA seulement les lignes dont le Core a la copie.
         essai=True : compte sans rien retirer."""
         essai = str((data or {}).get("essai")).lower() == "true"
         maintenant = datetime.now()
         res: dict = {"quand": maintenant.isoformat(timespec="seconds"), "essai": essai,
-                     "retirees": {}, "gardees_sans_copie": {}, "erreurs": []}
+                     "retirees": {}, "gardees_sans_copie": {}, "erreurs": [], "durees": {}}
         for liste in LISTES_PURGE:
             source = liste.removeprefix("todo.")
+            t0 = time.monotonic()
             try:
                 rep = await self.appel("POST", "/services/todo/get_items?return_response",
                                        {"entity_id": liste})
                 items = rep.get("service_response", {}).get(liste, {}).get("items", [])
-                self.memoire.ajouter(source, items)  # recopie juste avant : rien ne se perd
-                choix = a_purger(liste, items, maintenant)
-                ok = [i for i in choix if i.get("uid") and self.memoire.a_la_copie(source, i)]
+                ok, choix = self._choisir(liste, source, items, maintenant)
+                res["durees"][source] = round(time.monotonic() - t0, 1)
                 sans = len(choix) - len(ok)
                 if ok and not essai:
                     for k in range(0, len(ok), 50):
