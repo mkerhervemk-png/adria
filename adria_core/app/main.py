@@ -28,6 +28,7 @@ from general import AgentGeneral
 from menus import AgentMenus
 from formulaires import AgentFormulaires
 from habitudes import AgentHabitudes
+from maintenance import AgentMaintenance
 from consolidation import AgentConsolidation
 from memoire_agent import AgentMemoire
 from passe import AgentPasse, libelle
@@ -46,7 +47,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.15.2"
+VERSION = "0.16.0"
 
 
 def lire_options() -> dict:
@@ -114,6 +115,8 @@ class Core:
         self.habitudes = AgentHabitudes(
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.heure_habitudes: str = opts.get("habitudes_heure") or "17:30"
+        self.maintenance = AgentMaintenance(
+            self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
@@ -446,6 +449,13 @@ class Core:
         except Exception:
             LOG.exception("Habitudes")
 
+    async def maintenance_matin(self, data: dict | None = None) -> None:
+        """Lot MA1 : diagnostic de maintenance 0 IA (06h30 ou événement adria_core_maintenance)."""
+        try:
+            await self.maintenance.diagnostic(data)
+        except Exception:
+            LOG.exception("Maintenance")
+
     async def habitudes_dimanche(self, data: dict | None = None) -> None:
         data = data or {}
         try:
@@ -625,7 +635,7 @@ class Core:
                                              "adria_core_souvenir", "adria_core_livre", "adria_core_journal",
                                              "adria_core_apprendre", "adria_core_competences_couper",
                                              "adria_core_general", "adria_core_budget", "adria_core_menus",
-                                             "adria_core_devoirs",
+                                             "adria_core_devoirs", "adria_core_maintenance",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -689,6 +699,8 @@ class Core:
                             asyncio.create_task(self.competences.recevoir_action(e.get("data", {})))
                             asyncio.create_task(self.menus.recevoir_action(e.get("data", {})))
                             asyncio.create_task(self.general.recevoir_action(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_maintenance":
+                            asyncio.create_task(self.maintenance_matin(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -742,7 +754,8 @@ class Core:
                                  self.planifier("10:02", self.budget_quotidien),
                                  self.planifier("17:15", self.menus.proposer),
                                  self.planifier("16:30", self.menus.ce_soir),
-                                 self.planifier("19:15", self.devoirs.bilan_soir))
+                                 self.planifier("19:15", self.devoirs.bilan_soir),
+                                 self.planifier("06:30", self.maintenance_matin))
 
 
 if __name__ == "__main__":
