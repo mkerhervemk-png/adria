@@ -30,6 +30,13 @@ from formulaires import AgentFormulaires
 from habitudes import AgentHabitudes
 from maintenance import AgentMaintenance
 from consolidation import AgentConsolidation
+from evolution import Evolution
+import evolution as EV
+from mcp import ServeurMCP
+import procedures as PR
+from procedures import Procedures
+import sens as SE
+from sens import Sens, fusionner
 from memoire_agent import AgentMemoire
 from passe import AgentPasse, libelle
 from purge import LISTES as LISTES_PURGE, a_purger
@@ -47,7 +54,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 
 
 def lire_options() -> dict:
@@ -81,6 +88,14 @@ class Core:
         self.ollama_url: str = opts.get("ollama_url") or "http://76e18fb5-ollama:11434"
         self.ollama_modele: str = opts.get("ollama_modele") or "llama3.2:3b"
         self.memoire = Memoire(BASE)
+        self.version = VERSION
+        self.evolution = Evolution(self.memoire)  # lot E1
+        self.procedures = Procedures(self.memoire)  # lot PR1
+        self.sens = Sens(self.memoire, self.ollama_url, opts.get("sens_modele") or SE.MODELE,
+                         float(opts.get("sens_seuil") or SE.SEUIL))  # lot S1
+        self.mcp_jeton: str = str(opts.get("mcp_jeton") or "")
+        self.mcp: ServeurMCP | None = None
+        self.deja_connecte = False
         self.routeur = Routeur(self)
         self.agent_memoire = AgentMemoire(self)
         self.consolidation = AgentConsolidation(self)
@@ -436,6 +451,9 @@ class Core:
         self.derniere_sync = datetime.now().isoformat(timespec="seconds")
         self.derniere_erreur = "; ".join(erreurs)[:250] or None
         LOG.info("Synchronisation : %s lignes nouvelles, %s erreurs", nouvelles, len(erreurs))
+        self.evolution.suivre("synchronisation", "mémoire", not erreurs,
+                              f"Recopie de la mémoire avec erreurs : {self.derniere_erreur}",
+                              "recopie de nouveau sans erreur")
         await self.publier_etat()
 
     async def nuit(self) -> None:
@@ -448,11 +466,20 @@ class Core:
             await self.habitudes.publier()
         except Exception:
             LOG.exception("Habitudes")
+        await self.reprendre_procedures()
+        await self.indexer_sens()
 
     async def maintenance_matin(self, data: dict | None = None) -> None:
         """Lot MA1 : diagnostic de maintenance 0 IA (06h30 ou événement adria_core_maintenance)."""
         try:
-            await self.maintenance.diagnostic(data)
+            res = await self.maintenance.diagnostic(data)
+            if not res.get("essai"):
+                for p in res.get("points", []):
+                    if p["cle"] in res.get("nouveaux", []):
+                        self.evolution.signaler(f"maintenance:{p['cle']}", "maison", p["texte"])
+                for cle in res.get("regles", []):
+                    self.evolution.corriger(f"maintenance:{cle}", "réglé (constaté au diagnostic du matin)")
+                await self.publier_evolution()
         except Exception:
             LOG.exception("Maintenance")
 
@@ -497,6 +524,10 @@ class Core:
             except Exception as e:
                 res["erreurs"].append(f"{source}: {str(e)[:120]}")
         LOG.info("Purge (%s) : %s", "essai" if essai else "réelle", res)
+        if not essai:
+            self.evolution.suivre("purge", "mémoire", not res["erreurs"],
+                                  "Purge des listes HA avec erreurs : " + "; ".join(res["erreurs"])[:200],
+                                  "purge de nouveau sans erreur")
         self.derniere_purge = res
         try:
             await self.appel("POST", "/events/adria_core_purge_resultat", res)
@@ -562,16 +593,34 @@ class Core:
                     "derniere_consolidation": self.consolidation.resume(),
                     "derniere_purge": self.derniere_purge,
                     "dernier_passe": self.passe.dernier,
+                    "sens": self.sens.indexation or self.sens.stats(),
+                    "mcp": {"actif": self.mcp is not None, "appels": self.mcp.appels if self.mcp else 0},
                     "version": VERSION,
                 },
             })
         except Exception as e:
             LOG.warning("Etat non publié : %s", e)
 
+    async def chercher_tout(self, question: str, n: int = 5, exclure: list[str] | None = None) -> list[dict]:
+        """Lot S1 : mots d'abord (P1) ; le sens complète s'il manque des réponses (interrupteur ON)."""
+        n = max(1, min(int(n), 20))
+        lignes = self.memoire.chercher(question, n, exclure or [])
+        if len(lignes) >= n or len(question.strip()) < 4 or await self.etat(SE.INTERRUPTEUR) != "on":
+            return lignes
+        try:
+            sens = await self.sens.chercher(question, n, exclure or [], delai=8)
+            self.evolution.corriger("sens_recherche", "la recherche par le sens répond de nouveau")
+        except Exception as e:
+            LOG.warning("Recherche par le sens : %s", str(e)[:150])
+            self.evolution.signaler("sens_recherche", "mémoire",
+                                    f"Recherche par le sens indisponible ({type(e).__name__})")
+            return lignes
+        return fusionner(lignes, sens, n)
+
     async def repondre(self, data: dict) -> None:
         req_id = data.get("req_id", "")
         try:
-            lignes = self.memoire.chercher(
+            lignes = await self.chercher_tout(
                 data.get("question", ""),
                 int(data.get("n", 5)),
                 data.get("exclure_sources") or [],
@@ -594,6 +643,10 @@ class Core:
             LOG.exception("Consolidation")
             res = {"ok": False, "raison": str(e)[:200]}
         LOG.info("Consolidation (essai) : %s", {k: v for k, v in res.items() if k != "proposition"})
+        self.evolution.suivre("consolidation", "mémoire", bool(res.get("ok")),
+                              f"Consolidation de nuit en échec : {res.get('raison') or 'garde-fou'}",
+                              f"consolidation réussie ({res.get('moteur') or '?'})")
+        await self.publier_evolution()
         try:
             await self.appel("POST", "/events/adria_core_consolider_resultat", res)
             await self.publier_etat()
@@ -616,6 +669,83 @@ class Core:
             pass
         await self.publier_etat()
 
+    # --- lots S1 / PR1 / E1 / BUS1 (19/11) --------------------------------------------
+    async def indexer_sens(self, forcer: bool = False, max_lignes: int = 50000) -> None:
+        """Vecteurs de sens manquants : tout à 03h30 (ou événement adria_core_sens) ; 500 au démarrage
+        pour ne pas charger le PC en journée."""
+        if await self.etat(SE.INTERRUPTEUR) != "on":
+            return
+        try:
+            if not await self.sens.installer_modele():
+                self.evolution.signaler("sens_modele", "mémoire",
+                                        f"Modèle de sens {self.sens.modele} absent d'Ollama")
+                return
+            self.evolution.corriger("sens_modele", f"modèle {self.sens.modele} présent dans Ollama")
+            res = await self.sens.indexer(max_lignes=max_lignes)
+            self.evolution.suivre("sens_index", "mémoire", not res.get("erreur"),
+                                  f"Indexation par le sens interrompue : {res.get('erreur')}",
+                                  "indexation par le sens terminée")
+        except Exception:
+            LOG.exception("Indexation sens")
+        await self.publier_etat()
+
+    async def reprendre_procedures(self) -> None:
+        try:
+            from habitudes import REGLES
+            lignes = [r[0] for r in self.memoire.db.execute(
+                "SELECT resume FROM lignes WHERE source = 'competences'").fetchall()]
+            self.procedures.reprendre(self.competences._lire("comp_creees", []), lignes,
+                                      self.habitudes.rappels, REGLES)
+        except Exception:
+            LOG.exception("Reprise des procédures")
+        await self.publier_capteur(PR.CAPTEUR, self.procedures.etat())
+
+    async def procedure_voix(self, data: dict) -> dict:
+        if await self.etat(PR.INTERRUPTEUR) != "on":
+            return {"req_id": data.get("req_id", ""), "ok": False, "texte": "La mémoire des procédures est éteinte."}
+        res = self.procedures.repondre(data)
+        await self.publier_capteur(PR.CAPTEUR, self.procedures.etat())
+        return res
+
+    async def correction(self, data: dict) -> dict:
+        res = self.evolution.lecon(data)
+        res["req_id"] = data.get("req_id", "")
+        await self.publier_evolution()
+        return res
+
+    async def publier_capteur(self, entite: str, etat: dict) -> None:
+        try:
+            etat["attributes"]["version"] = VERSION
+            await self.appel("POST", f"/states/{entite}", etat)
+        except Exception as e:
+            LOG.warning("%s non publié : %s", entite, e)
+
+    async def publier_evolution(self) -> None:
+        await self.publier_capteur(EV.CAPTEUR, self.evolution.etat())
+
+    async def publier_tout(self) -> None:
+        """Après un redémarrage de HA : republier tous les capteurs du Core."""
+        await asyncio.sleep(20)
+        for f in (self.publier_etat, self.publier_etat_ia, self.publier_etat_formulaires, self.publier_suivis,
+                  self.publier_budget, self.devoirs.publier, self.habitudes.publier, self.maintenance.publier,
+                  self.publier_evolution):
+            try:
+                await f()
+            except Exception as e:
+                LOG.warning("Republication : %s", str(e)[:120])
+        await self.publier_capteur(PR.CAPTEUR, self.procedures.etat())
+        LOG.info("Capteurs du Core republiés après reconnexion")
+
+    def resume_etat(self) -> dict:
+        s = self.memoire.stats()
+        return {"version": VERSION, "lignes": s["lignes"], "depuis": s["depuis"],
+                "derniere_sync": self.derniere_sync, "derniere_erreur": self.derniere_erreur,
+                "derniere_purge": self.derniere_purge, "derniere_consolidation": self.consolidation.resume(),
+                "maintenance": (self.maintenance.dernier or {}).get("niveau"),
+                "sens": self.sens.indexation or self.sens.stats(), "ia_24h": self.memoire.stats_ia(86400),
+                "erreurs_ouvertes": len(self.evolution.lister("ouverte", 100)),
+                "procedures": len(self.procedures.toutes())}
+
     async def ecouter(self) -> None:
         """Ecoute les événements ; se reconnecte seul en cas de coupure."""
         attente = 5
@@ -636,10 +766,14 @@ class Core:
                                              "adria_core_apprendre", "adria_core_competences_couper",
                                              "adria_core_general", "adria_core_budget", "adria_core_menus",
                                              "adria_core_devoirs", "adria_core_maintenance",
+                                             "adria_core_procedure", "adria_core_correction", "adria_core_sens",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
                     attente = 5
+                    if self.deja_connecte:  # HA a redémarré : ses capteurs « API » ont disparu
+                        asyncio.create_task(self.publier_tout())
+                    self.deja_connecte = True
                     async for msg in ws:
                         if msg.type != aiohttp.WSMsgType.TEXT:
                             continue
@@ -701,6 +835,14 @@ class Core:
                             asyncio.create_task(self.general.recevoir_action(e.get("data", {})))
                         elif e["event_type"] == "adria_core_maintenance":
                             asyncio.create_task(self.maintenance_matin(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_procedure":
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_procedure_resultat", self.procedure_voix(e.get("data", {}))))
+                        elif e["event_type"] == "adria_core_correction":
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_correction_resultat", self.correction(e.get("data", {}))))
+                        elif e["event_type"] == "adria_core_sens":
+                            asyncio.create_task(self.indexer_sens(forcer=True))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:
@@ -736,12 +878,23 @@ class Core:
                 await PageFormulaires(self.formulaires, self, self.courriers, self.retrouver).demarrer()
             except Exception:
                 LOG.exception("Page formulaires")
+            self.sens.session = session
+            if self.mcp_jeton:
+                try:
+                    self.mcp = ServeurMCP(self, self.mcp_jeton)
+                    await self.mcp.demarrer()
+                except Exception:
+                    LOG.exception("Bus MCP")
+                    self.mcp = None
             await self.synchroniser()
             try:
                 self.habitudes.calculer()
                 await self.habitudes.publier()
             except Exception:
                 LOG.exception("Habitudes")
+            await self.reprendre_procedures()
+            await self.publier_evolution()
+            asyncio.create_task(self.indexer_sens(max_lignes=500))
             await asyncio.gather(self.ecouter(), self.battement(), self.planifier(),
                                  self.planifier(self.heure_carnet, self.faire_carnet),
                                  self.planifier(self.heure_consolidation, self.consolider),
