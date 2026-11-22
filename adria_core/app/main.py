@@ -501,9 +501,15 @@ class Core:
         essai=True : compte sans rien retirer."""
         essai = str((data or {}).get("essai")).lower() == "true"
         maintenant = datetime.now()
+        # Garde-fou centralisé : aucune suppression sans interrupteur ON.
+        # Une erreur de lecture (etat -> None) ferme le garde-fou.
+        bloquee = not essai and await self.etat("input_boolean.adria_core_purge") != "on"
         res: dict = {"quand": maintenant.isoformat(timespec="seconds"), "essai": essai,
+                     "bloquee": bloquee,
                      "retirees": {}, "gardees_sans_copie": {}, "erreurs": [], "durees": {}}
-        for liste in LISTES_PURGE:
+        if bloquee:
+            LOG.warning("Purge bloquée : input_boolean.adria_core_purge n'est pas ON")
+        for liste in ([] if bloquee else LISTES_PURGE):
             source = liste.removeprefix("todo.")
             t0 = time.monotonic()
             try:
@@ -524,7 +530,7 @@ class Core:
             except Exception as e:
                 res["erreurs"].append(f"{source}: {str(e)[:120]}")
         LOG.info("Purge (%s) : %s", "essai" if essai else "réelle", res)
-        if not essai:
+        if not essai and not bloquee:
             self.evolution.suivre("purge", "mémoire", not res["erreurs"],
                                   "Purge des listes HA avec erreurs : " + "; ".join(res["erreurs"])[:200],
                                   "purge de nouveau sans erreur")
