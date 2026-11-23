@@ -132,3 +132,17 @@ def test_mode_test_un_seul_moteur():
     ha = FauxHA({"gemini": "G", "ollama": "Réponse locale"})
     r = lancer(Routeur(ha).demander("Q", "interactif", seulement="ollama"))
     assert r["moteur"] == "ollama" and [a[0] for a in ha.appels] == ["ollama"]
+
+
+def test_echecs_par_raison():
+    import os, tempfile, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
+    from store import Memoire
+    m = Memoire(os.path.join(tempfile.mkdtemp(), "t.db"))
+    m.noter_ia("gemini", "interactif", False, 12.0, "trop lent (> 12 s)", quand=1000)
+    m.noter_ia("gemini", "interactif", False, 12.0, "trop lent (> 12 s) -> coupé 15 min", quand=1001)
+    m.noter_ia("ollama", "rapide", False, 1.0, "erreur : connexion refusée sur le port 11434 très long texte", quand=1002)
+    m.noter_ia("gemini", "rapide", True, 3.0, None, quand=1003)
+    e = m.stats_ia_echecs(10_000, maintenant=2000)
+    assert e["gemini"] == {"trop lent (> 12 s)": 2}
+    assert list(e["ollama"].values()) == [1] and len(list(e["ollama"])[0]) <= 40

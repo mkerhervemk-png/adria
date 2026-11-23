@@ -264,6 +264,20 @@ class Memoire:
                 "max_s": round(r[5], 1) if r[5] is not None else None}
         return res
 
+    def stats_ia_echecs(self, depuis_s: float = 7 * 86400, maintenant: float | None = None) -> dict:
+        """R2 (23/11) : pourquoi les moteurs échouent (trop lent, erreur, réponse vide), par moteur."""
+        import time
+        t0 = (maintenant or time.time()) - depuis_s
+        res: dict = {}
+        for moteur, raison, n in self.db.execute(
+                "SELECT moteur, raison, COUNT(*) FROM ia_stats WHERE quand >= ? AND ok = 0"
+                " GROUP BY moteur, raison", (t0,)):
+            cle = re.sub(r"\s*->.*$", "", (raison or "?"))  # sans « -> coupé 15 min »
+            cle = re.sub(r"^erreur : .*", lambda m: m.group(0)[:40], cle)
+            d = res.setdefault(moteur, {})
+            d[cle] = d.get(cle, 0) + n
+        return res
+
     def stats(self) -> dict:
         total = self.db.execute("SELECT COUNT(*) FROM lignes").fetchone()[0]
         par_source = {

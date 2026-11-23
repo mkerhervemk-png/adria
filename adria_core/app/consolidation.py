@@ -3,14 +3,19 @@
 Reprise à l'identique de script.adria_memoire_consolider (v3.5) :
 tri 0 IA (RES > 30 j, OBS oubliées, OBS n>=5 -> REGLE), saut si rien de nouveau,
 un seul appel IA « rapide », lecture imp|tag|n|dt|fait, garde-fou 50 %.
-MODE ESSAI UNIQUEMENT dans ce lot : rien n'est écrit dans Home Assistant ;
-la proposition est gardée dans la base du Core (meta) pour comparaison.
+Essai (18/11) : rien n'est écrit dans HA, la proposition est gardée (meta).
+Réel (v0.18.0, 23/11, validé par Mael) : si input_boolean.adria_core_consolidation_reelle est ON,
+le Core écrit dans todo.adria_memoire exactement comme le script HA (les anciens faits passent en
+« terminé », jamais effacés sans copie dans la base du Core ; les nouveaux faits sont ajoutés).
+Le script HA de 02h30 ne tourne plus que si le Core n'a pas réussi cette nuit (secours).
 """
 import json
 import re
 from datetime import datetime, timedelta
 
 from memoire_agent import items as liste_items
+
+LISTE = "todo.adria_memoire"
 
 COURTES = ["input_text.avatar_memoire_apprentissages", "input_text.avatar_memoire_patterns",
            "input_text.adria_mem_decisions", "input_text.adria_raisons_refus_recents",
@@ -194,15 +199,62 @@ class AgentConsolidation:
                 pass
         return n
 
+    async def _todo(self, service: str, data: dict) -> bool:
+        try:
+            await self.core.appel("POST", f"/services/todo/{service}", {"entity_id": LISTE, **data})
+            return True
+        except Exception:
+            return False
+
+    async def _retirer_termines(self) -> int:
+        """Comme todo.remove_completed_items du script HA, mais seulement les lignes copiées dans le Core."""
+        try:
+            rep = await self.core.appel("POST", "/services/todo/get_items?return_response",
+                                        {"entity_id": LISTE, "status": "completed"})
+        except Exception:
+            return 0
+        ok = [i["uid"] for i in liste_items(rep, LISTE)
+              if i.get("uid") and self.core.memoire.a_la_copie("adria_memoire", i)]
+        for k in range(0, len(ok), 50):
+            await self._todo("remove_item", {"item": ok[k:k + 50]})
+        return len(ok)
+
+    async def _ecrire_tri(self, tri: dict) -> int:
+        n = 0
+        for uid in tri["obs_vieilles"] + tri["res_vieux"]:
+            n += await self._todo("update_item", {"item": uid, "status": "completed"})
+        for p in tri["promouvoir"]:
+            n += await self._todo("update_item", {"item": p["uid"], "rename": p["s"], "description": p["d"]})
+        return n
+
+    async def _ecrire(self, restants: list[dict], lignes: list[dict], maintenant: datetime) -> dict:
+        termines = ajoutes = 0
+        for i in restants:
+            if i.get("uid"):
+                termines += await self._todo("update_item", {"item": i["uid"], "status": "completed"})
+        for l in lignes:
+            ajoutes += await self._todo("add_item", {
+                "item": f"[{l['tag']}] {l['fait']}",
+                "description": f"imp={l['imp']};dt={l['dt'] or maintenant.strftime('%Y-%m-%d')};n={l['n']};src=consolide"})
+        return {"termines": termines, "ajoutes": ajoutes}
+
     async def consolider(self, forcer: bool = False) -> dict:
-        """Toujours en ESSAI dans le lot M2b-2 : aucune écriture dans Home Assistant."""
+        """Essai par défaut ; réel si input_boolean.adria_core_consolidation_reelle est ON."""
         if not forcer and await self.core.etat("input_boolean.adria_core_consolidation") != "on":
             return {"ok": False, "raison": "adria_core_consolidation OFF"}
+        reel = await self.core.etat("input_boolean.adria_core_consolidation_reelle") == "on"
         maintenant = datetime.now()
         items = await self._items()
+        ecrit: dict = {}
+        if reel:
+            # Règle de Mael : rien ne quitte HA sans copie dans le Core -> copie d'abord.
+            self.core.memoire.ajouter("adria_memoire", items, maintenant)
+            ecrit["retires_termines"] = await self._retirer_termines()
         tri = trier(items, maintenant)
+        if reel:
+            ecrit["tri"] = await self._ecrire_tri(tri)
         restants = appliquer_tri(items, tri)
-        res = {"essai": True, "quand": maintenant.isoformat(timespec="seconds"), "avant": len(items),
+        res = {"essai": not reel, "quand": maintenant.isoformat(timespec="seconds"), "avant": len(items),
                "tri": {"res_vieux": len(tri["res_vieux"]), "obs_oubliees": len(tri["obs_vieilles"]),
                        "promues_regle": len(tri["promouvoir"])}}
         if rien_de_nouveau(restants, await self._courtes_changees(maintenant)):
@@ -222,6 +274,13 @@ class AgentConsolidation:
                 res["raison"] = str(rep.get("erreur") or "IA sans réponse")[:120]
             elif annule:
                 res["raison"] = f"garde-fou : {len(lignes)} faits pour {len(restants)}"
+            if reel and res["ok"]:
+                if res["interdits"]:  # sécurité en plus du script HA : on n'écrit pas
+                    res.update(ok=False, raison="faits interdits recréés : rien écrit")
+                else:
+                    ecrit.update(await self._ecrire(restants, lignes, maintenant))
+        if reel:
+            res["ecrit"] = ecrit
         self.dernier = res
         try:
             self.core.memoire.meta("derniere_consolidation", json.dumps(res, ensure_ascii=False))

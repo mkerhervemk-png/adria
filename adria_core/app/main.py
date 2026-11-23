@@ -29,6 +29,8 @@ from menus import AgentMenus
 from formulaires import AgentFormulaires
 from habitudes import AgentHabitudes
 from maintenance import AgentMaintenance
+from analyse import AgentAnalyse, HEURES as HEURES_ANALYSE
+from veille import AgentVeille
 from consolidation import AgentConsolidation
 from evolution import Evolution
 import evolution as EV
@@ -54,7 +56,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.17.0"
+VERSION = "0.18.0"
 
 
 def lire_options() -> dict:
@@ -132,6 +134,9 @@ class Core:
         self.heure_habitudes: str = opts.get("habitudes_heure") or "17:30"
         self.maintenance = AgentMaintenance(
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
+        self.analyse = AgentAnalyse(  # lot AN1 (23/11)
+            self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
+        self.veille = AgentVeille(self)  # lot V1 (23/11)
         self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
@@ -399,6 +404,7 @@ class Core:
                     "moteurs_24h": self.memoire.stats_ia(86400),
                     "moteurs_7j": self.memoire.stats_ia(7 * 86400),
                     "par_profondeur_24h": self.memoire.stats_ia_profondeur(86400),
+                    "echecs_7j": self.memoire.stats_ia_echecs(7 * 86400),
                     "coupe_circuit": self.routeur.cc.etat(),
                     "battement": datetime.now().isoformat(timespec="seconds"),
                     "version": VERSION,
@@ -482,6 +488,20 @@ class Core:
                 await self.publier_evolution()
         except Exception:
             LOG.exception("Maintenance")
+
+    async def analyser(self, data: dict | None = None) -> None:
+        """Lot AN1 : anomalies de la maison, 0 IA (08h, 12h, 18h ou événement adria_core_analyse)."""
+        try:
+            await self.analyse.analyser(data)
+        except Exception:
+            LOG.exception("Analyse")
+
+    async def veiller(self, data: dict | None = None) -> None:
+        """Lot V1 : veille du jour, 0 IA (06h45 ou événement adria_core_veille)."""
+        try:
+            await self.veille.veiller(data)
+        except Exception:
+            LOG.exception("Veille")
 
     async def habitudes_dimanche(self, data: dict | None = None) -> None:
         data = data or {}
@@ -641,7 +661,7 @@ class Core:
         await self.appel("POST", "/events/adria_core_resultat", resultat)
 
     async def consolider(self, data: dict | None = None) -> None:
-        """Lot M2b-2 : consolidation de nuit EN ESSAI (aucune écriture HA)."""
+        """Lot M2b-2 : consolidation de nuit (essai, ou réelle si adria_core_consolidation_reelle ON)."""
         data = data or {}
         try:
             res = await self.consolidation.consolider(forcer=str(data.get("forcer")).lower() == "true")
@@ -734,7 +754,7 @@ class Core:
         await asyncio.sleep(20)
         for f in (self.publier_etat, self.publier_etat_ia, self.publier_etat_formulaires, self.publier_suivis,
                   self.publier_budget, self.devoirs.publier, self.habitudes.publier, self.maintenance.publier,
-                  self.publier_evolution):
+                  self.analyse.publier, self.veille.publier, self.publier_evolution):
             try:
                 await f()
             except Exception as e:
@@ -748,6 +768,7 @@ class Core:
                 "derniere_sync": self.derniere_sync, "derniere_erreur": self.derniere_erreur,
                 "derniere_purge": self.derniere_purge, "derniere_consolidation": self.consolidation.resume(),
                 "maintenance": (self.maintenance.dernier or {}).get("niveau"),
+                "analyse": len((self.analyse.dernier or {}).get("anomalies", [])),
                 "sens": self.sens.indexation or self.sens.stats(), "ia_24h": self.memoire.stats_ia(86400),
                 "erreurs_ouvertes": len(self.evolution.lister("ouverte", 100)),
                 "procedures": len(self.procedures.toutes())}
@@ -773,6 +794,7 @@ class Core:
                                              "adria_core_general", "adria_core_budget", "adria_core_menus",
                                              "adria_core_devoirs", "adria_core_maintenance",
                                              "adria_core_procedure", "adria_core_correction", "adria_core_sens",
+                                             "adria_core_analyse", "adria_core_veille",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -841,6 +863,10 @@ class Core:
                             asyncio.create_task(self.general.recevoir_action(e.get("data", {})))
                         elif e["event_type"] == "adria_core_maintenance":
                             asyncio.create_task(self.maintenance_matin(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_analyse":
+                            asyncio.create_task(self.analyser(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_veille":
+                            asyncio.create_task(self.veiller(e.get("data", {})))
                         elif e["event_type"] == "adria_core_procedure":
                             asyncio.create_task(self.repondre_evenement(
                                 "adria_core_procedure_resultat", self.procedure_voix(e.get("data", {}))))
@@ -914,7 +940,9 @@ class Core:
                                  self.planifier("17:15", self.menus.proposer),
                                  self.planifier("16:30", self.menus.ce_soir),
                                  self.planifier("19:15", self.devoirs.bilan_soir),
-                                 self.planifier("06:30", self.maintenance_matin))
+                                 self.planifier("06:30", self.maintenance_matin),
+                                 self.planifier("06:45", self.veiller),
+                                 *(self.planifier(h, self.analyser) for h in HEURES_ANALYSE))
 
 
 if __name__ == "__main__":
