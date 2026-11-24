@@ -1,7 +1,7 @@
 name: ADRIA Core
-version: "0.21.1"
+version: "0.21.2"
 slug: adria_core
-description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances, classement des papiers, abonnements, garanties, « sors-moi le papier », journal de famille, compétences apprises à la demande, « Mon passé », habitudes repérées, cerveau général, budget du foyer, menus et courses, aide aux devoirs, maintenance de la maison, recherche par le sens, procédures, journal erreur → correction, bus MCP (lecture seule).
+description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances, classement des papiers, abonnements, garanties, « sors-moi le papier », journal de famille, compétences apprises à la demande, « Mon passé », habitudes repérées, cerveau général, budget du foyer, menus et courses, aide aux devoirs, maintenance de la maison, recherche par le sens, procédures, journal erreur → correction, bus MCP (lecture seule, jetons par profil).
 arch:
   - amd64
 init: false
@@ -35,6 +35,9 @@ options:
     - media_player.salon_decodeur_salon_media_player
     - input_select.quart_mael
     - input_boolean.mode_nuit
+  mcp_jetons: []
+  memoire_sources_enfant: []
+  memoire_sources_inconnu: []
   ollama_url: http://76e18fb5-ollama:11434
   ollama_modele: llama3.2:3b
   heure_carnet: "23:40"
@@ -65,6 +68,14 @@ schema:
   sens_modele: str?
   sens_seuil: float(0.3,0.95)?
   mcp_jeton: password?
+  mcp_jeton_profil: list(adulte|enfant|inconnu)?
+  mcp_jetons:
+    - jeton: password
+      profil: list(adulte|enfant|inconnu)
+  memoire_sources_enfant:
+    - str?
+  memoire_sources_inconnu:
+    - str?
   heure_sync: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
   listes:
     - str
