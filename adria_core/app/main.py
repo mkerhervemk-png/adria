@@ -32,6 +32,7 @@ from maintenance import AgentMaintenance
 from analyse import AgentAnalyse, HEURES as HEURES_ANALYSE
 from veille import AgentVeille
 from bilan import AgentBilan, HEURE as HEURE_BILAN
+from famille import AgentFamille, HEURE as HEURE_FAMILLE
 from consolidation import AgentConsolidation
 from evolution import Evolution
 import evolution as EV
@@ -57,7 +58,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.19.0"
+VERSION = "0.20.0"
 
 
 def lire_options() -> dict:
@@ -138,6 +139,8 @@ class Core:
         self.analyse = AgentAnalyse(  # lot AN1 (23/11)
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.veille = AgentVeille(self)  # lot V1 (23/11)
+        self.famille = AgentFamille(  # lot F1 lecture (24/11)
+            self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.bilan = AgentBilan(  # lot AA1 (24/11)
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
@@ -507,6 +510,13 @@ class Core:
         except Exception:
             LOG.exception("Veille")
 
+    async def famille_matin(self, data: dict | None = None) -> None:
+        """Lot F1 : journée des enfants 07h00, 0 IA (ou événement adria_core_famille {essai})."""
+        try:
+            await self.famille.matin(data)
+        except Exception:
+            LOG.exception("Famille (matin)")
+
     async def bilan_dimanche(self, data: dict | None = None) -> None:
         """Lot AA1 : un seul bilan du dimanche 19h45 (ou événement adria_core_bilan_envoyer {essai})."""
         try:
@@ -765,7 +775,7 @@ class Core:
         await asyncio.sleep(20)
         for f in (self.publier_etat, self.publier_etat_ia, self.publier_etat_formulaires, self.publier_suivis,
                   self.publier_budget, self.devoirs.publier, self.habitudes.publier, self.maintenance.publier,
-                  self.analyse.publier, self.veille.publier, self.publier_evolution):
+                  self.analyse.publier, self.veille.publier, self.famille.publier, self.publier_evolution):
             try:
                 await f()
             except Exception as e:
@@ -806,7 +816,7 @@ class Core:
                                              "adria_core_devoirs", "adria_core_maintenance",
                                              "adria_core_procedure", "adria_core_correction", "adria_core_sens",
                                              "adria_core_analyse", "adria_core_veille",
-                                             "adria_core_bilan", "adria_core_bilan_envoyer",
+                                             "adria_core_bilan", "adria_core_bilan_envoyer", "adria_core_famille",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -877,6 +887,8 @@ class Core:
                             asyncio.create_task(self.maintenance_matin(e.get("data", {})))
                         elif e["event_type"] == "adria_core_analyse":
                             asyncio.create_task(self.analyser(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_famille":
+                            asyncio.create_task(self.famille_matin(e.get("data", {})))
                         elif e["event_type"] == "adria_core_bilan":
                             self.bilan.recevoir(e.get("data", {}))
                         elif e["event_type"] == "adria_core_bilan_envoyer":
@@ -959,6 +971,7 @@ class Core:
                                  self.planifier("06:30", self.maintenance_matin),
                                  self.planifier("06:45", self.veiller),
                                  self.planifier(HEURE_BILAN, self.bilan_dimanche),
+                                 self.planifier(HEURE_FAMILLE, self.famille_matin),
                                  *(self.planifier(h, self.analyser) for h in HEURES_ANALYSE))
 
 
