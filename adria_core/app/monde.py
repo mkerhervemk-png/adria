@@ -32,6 +32,7 @@ ENFANTS = ("iwan", "aelia")
 INCONNU = ("unknown", "unavailable", "", None)
 SEUIL_INSTER = 35          # % sous lequel on signale un trajet prévu
 PLUIE_MM = 0.5
+JOURS = ("lun", "mar", "mer", "jeu", "ven", "sam", "dim")
 QUARTS = ("matin", "apres-midi", "après-midi", "nuit", "batarde", "bâtarde")
 
 
@@ -64,7 +65,9 @@ def vue(etats: list[dict], evs: dict, maintenant: datetime) -> dict:
         pr = ""
         if prochain:
             d = _dt(prochain["start"])
-            pr = f"{d.strftime('%a %H:%M') if d.date() != maintenant.date() else d.strftime('%H:%M')} {prochain.get('summary', '')[:40]}"
+            jour = "" if d.date() == maintenant.date() else (("demain " if d.date() == (maintenant + timedelta(days=1)).date()
+                                                              else JOURS[d.weekday()] + " "))
+            pr = f"{jour}{d.strftime('%H:%M')} {prochain.get('summary', '')[:40]}"
         gens[p] = {"ou": ou, "prochain": pr}
     maison = {
         "quart": st("input_select.quart_mael"), "mode_nuit": st("input_boolean.mode_nuit"),
@@ -115,8 +118,8 @@ def anticiper(etats: list[dict], evs: dict, anniv: list[dict], pluie: list[dict]
     for p, e in a_venir:
         if p in ENFANTS and not (e.get("location") or "").strip() and "cours" not in (e.get("summary") or "").lower():
             d = _dt(e["start"])
-            out.append({"cle": f"adresse_{p}_{d.isoformat()[:16]}", "quand": d.strftime("%a %H:%M"),
-                        "texte": f"{e.get('summary', '')[:30]} ({p.capitalize()}, {d.strftime('%a %Hh%M')}) n'a pas d'adresse : pas de rappel de départ"})
+            out.append({"cle": f"adresse_{p}_{d.isoformat()[:16]}", "quand": f"{JOURS[d.weekday()]} {d.strftime('%H:%M')}",
+                        "texte": f"{e.get('summary', '')[:30]} ({p.capitalize()}, {JOURS[d.weekday()]} {d.strftime('%Hh%M')}) n'a pas d'adresse : pas de rappel de départ"})
     # 4. Anniversaire dans les 7 jours
     for e in anniv:
         d = _dt(str(e.get("start")) + ("" if "T" in str(e.get("start")) else "T00:00:00"))
@@ -186,6 +189,10 @@ class AgentMonde:
 
     async def boucle(self) -> None:
         import asyncio
+        try:  # capteur des notifications visible dès le démarrage
+            await self.core.notifs.publier()
+        except Exception:
+            pass
         while True:
             try:
                 await self.calculer()
