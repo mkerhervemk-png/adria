@@ -30,11 +30,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Installation reproductible
-        run: |
-          sudo apt-get update -q && sudo apt-get install -y -q poppler-utils
-          python -m pip install --upgrade pip
-          pip install aiohttp==3.* pypdf==6.* reportlab==4.* numpy==2.* pytest==8.* pytest-cov==6.* ruff==0.8.* pyyaml==6.*
+      - name: Outils d'analyse
+        run: pip install ruff==0.8.* pyyaml==6.*
       - name: Format et analyse statique (erreurs bloquantes)
         run: ruff check --select E9,F63,F7,F82 app tests
       - name: Contrôle de la configuration
@@ -51,10 +48,20 @@ jobs:
               assert k in cfg["schema"], f"option {k} absente du schéma"
           print("configuration cohérente :", v)
           EOF
+      # Installation reproductible : les tests tournent DANS l'image de l'appli (même Dockerfile, même
+      # Alpine, mêmes poppler/pypdf/reportlab qu'en production), pas sur l'Ubuntu du runner.
+      - name: Image de l'appli (Dockerfile)
+        run: docker build -t adria-core-test .
       - name: Tests de sécurité (P1, bloquants)
-        run: python -m pytest -q tests/test_securite_v0212.py tests/test_purge_garde.py tests/test_consolidation.py
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src adria-core-test sh -c
+          "apk add --no-cache py3-pytest py3-pytest-cov >/dev/null &&
+          python3 -m pytest -q -p no:cacheprovider tests/test_securite_v0212.py tests/test_purge_garde.py tests/test_consolidation.py"
       - name: Tous les tests + couverture
-        run: python -m pytest -q --cov=app --cov-report=term --cov-report=xml tests
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src adria-core-test sh -c
+          "apk add --no-cache py3-pytest py3-pytest-cov >/dev/null &&
+          python3 -m pytest -q -p no:cacheprovider --cov=app --cov-report=term --cov-report=xml tests"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
