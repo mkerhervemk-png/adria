@@ -8,6 +8,7 @@ import android.os.HandlerThread;
 import fr.kerherve.jarvis.HaClient;
 import fr.kerherve.jarvis.MsgBridge;
 import fr.kerherve.jarvis.Notifs;
+import fr.kerherve.jarvis.SecureCfg;
 
 import org.json.JSONObject;
 
