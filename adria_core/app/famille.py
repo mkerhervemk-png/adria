@@ -29,10 +29,11 @@ HEURE = "07:00"
 VACANCES = "calendar.vacances_scolaires_zone_b"
 ENFANTS = (("Iwan", "iwan", "input_text.edt_iwan_fin_cours_aujourd_hui", "input_boolean.iwan_malade"),
            ("Ryan", "ryan", "input_text.edt_ryan_fin_cours_aujourd_hui", None))
+STAGE_RYAN = "input_boolean.ryan_en_stage"
 INCONNU = ("unknown", "unavailable", "none", "", None)
 
 
-def journee(etats: list[dict], maintenant: datetime) -> dict:
+def journee(etats: list[dict], maintenant: datetime, stage: dict | None = None) -> dict:
     """Etats HA -> {ecole: bool, lignes: [...], texte}. Sans IA."""
     par = {e["entity_id"]: e for e in etats}
     st = lambda i: (par.get(i) or {}).get("state")  # noqa: E731
@@ -45,6 +46,14 @@ def journee(etats: list[dict], maintenant: datetime) -> dict:
     for nom, cle, fin_aide, malade in ENFANTS:
         if malade and st(malade) == "on":
             blocs.append(f"{nom} : malade aujourd'hui (pas d'école).")
+            continue
+        if cle == "ryan" and st(STAGE_RYAN) == "on":  # 24/11 : pendant le stage, jamais Ecole Directe
+            creneaux = sorted((stage or {}).get("ryan", []))
+            if creneaux:
+                blocs.append("Ryan : stage " + " / ".join(f"{d}–{f}" for d, f in creneaux)
+                             + (f" · {stage.get('lieu')}" if stage.get("lieu") else ""))
+            else:
+                blocs.append("Ryan : stage, pas de créneau dans son agenda aujourd'hui.")
             continue
         s = f"sensor.ed_{cle}_kerherve_emploi_du_temps_aujourd_hui"
         cours = at(s).get("Emploi du temps") or [] if st(s) not in INCONNU else []
@@ -90,10 +99,25 @@ class AgentFamille:
         except Exception as e:
             LOG.warning("Etat famille non publié : %s", e)
 
+    async def _stage(self, maintenant: datetime) -> dict:
+        """Créneaux « Stage » du jour dans calendar.ryan (24/11 : stage de Ryan, Ecole Directe ignoré)."""
+        try:
+            debut = maintenant.replace(hour=0, minute=0, second=0, microsecond=0)
+            rep = await self.core.appel("POST", "/services/calendar/get_events?return_response", {
+                "entity_id": "calendar.ryan", "start_date_time": debut.isoformat(),
+                "end_date_time": debut.replace(hour=23, minute=59).isoformat()})
+            ev = ((rep or {}).get("service_response") or {}).get("calendar.ryan", {}).get("events", [])
+        except Exception:
+            return {}
+        ev = [e for e in ev if "stage" in (e.get("summary") or "").lower() and "T" in str(e.get("start"))]
+        lieu = next((e.get("location") for e in ev if e.get("location")), "")
+        return {"ryan": [(str(e["start"])[11:16], str(e["end"])[11:16]) for e in ev],
+                "lieu": lieu.split(",")[0] if lieu else ""}
+
     async def matin(self, data: dict | None = None) -> dict:
         essai = str((data or {}).get("essai")).lower() == "true"
         maintenant = datetime.now(FUSEAU)
-        res = journee(await self.core.appel("GET", "/states"), maintenant)
+        res = journee(await self.core.appel("GET", "/states"), maintenant, await self._stage(maintenant))
         res.update(quand=maintenant.isoformat(timespec="seconds"), notifie=False, essai=essai)
         if res["ecole"] and not essai and await self.core.etat(INTERRUPTEUR) == "on":
             jour = maintenant.date().isoformat()
