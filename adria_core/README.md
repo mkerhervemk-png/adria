@@ -1,4 +1,4 @@
-# ADRIA Core (v0.21.2)
+# ADRIA Core (v0.21.3)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
@@ -6,6 +6,12 @@ Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par
 routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
 échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
 et bus MCP en lecture seule.
+
+## Nouveau en 0.21.3
+
+- Profil `enfant` : archives des épisodes (`archive/episode`) et du journal intérieur
+  (`archive/journal_interieur`) ajoutées, comme la règle validée le 17/11. `script.avatar_demander` envoie
+  désormais `profil` (adulte / enfant / inconnu) via `script.adria_core_chercher`.
 
 ## Nouveau en 0.21.2 — sécurité (dossier de remédiation du 24/11/2026)
 

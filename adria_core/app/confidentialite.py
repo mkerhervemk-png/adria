@@ -24,8 +24,10 @@ RESTREINTS = (ENFANT, INCONNU)
 # Listes blanches des profils restreints.
 SOURCES_INCONNU = ("procedures", "competences", "menus")
 # Reprise de general.SOURCES_ENFANT (validée par Mael) + procédures/compétences.
-SOURCES_ENFANT = ("adria_souvenirs", "archive/souvenir", "adria_jarvis_episodes", "adria_journal_interieur",
-                  "souvenirs_famille", "menus", "procedures", "competences")
+# + archives des épisodes et du journal intérieur : règle validée le 17/11 dans script.avatar_demander.
+SOURCES_ENFANT = ("adria_souvenirs", "archive/souvenir", "adria_jarvis_episodes", "archive/episode",
+                  "adria_journal_interieur", "archive/journal_interieur", "souvenirs_famille", "menus",
+                  "procedures", "competences")
 
 # Sources que l'ancien script HA (restreint=true) excluait : leur présence dans une demande signale
 # un profil restreint, même si HA n'envoie pas encore le champ `profil`.

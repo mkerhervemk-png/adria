@@ -407,3 +407,12 @@ def test_r6_reformulations_bloquees(fait):
 ])
 def test_r6_pas_de_faux_positif(fait):
     assert CF.sujet_interdit(fait) is None, fait
+
+
+def test_enfant_lit_les_archives_validees_le_17_11(tmp_path):
+    m = Memoire(str(tmp_path / "e.db"))
+    m.ajouter("archive/episode", [{"summary": "Episode cadeau du soir", "date": "2026-11-01"}])
+    m.ajouter("archive/journal_interieur", [{"summary": "Journal cadeau ADRIA", "date": "2026-11-02"}])
+    c = CoreReel(m)
+    assert {"archive/episode", "archive/journal_interieur"} <= sources(run(c.chercher_tout("cadeau", 10, profil=CF.ENFANT)))
+    assert not sources(run(c.chercher_tout("cadeau", 10, profil=CF.INCONNU)))
