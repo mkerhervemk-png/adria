@@ -33,6 +33,8 @@ from analyse import AgentAnalyse, HEURES as HEURES_ANALYSE
 from veille import AgentVeille
 from bilan import AgentBilan, HEURE as HEURE_BILAN
 from famille import AgentFamille, HEURE as HEURE_FAMILLE
+from monde import AgentMonde
+from notifs import AgentNotifs
 from consolidation import AgentConsolidation
 from evolution import Evolution
 import evolution as EV
@@ -58,7 +60,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.20.2"
+VERSION = "0.21.0"
 
 
 def lire_options() -> dict:
@@ -141,6 +143,8 @@ class Core:
         self.veille = AgentVeille(self)  # lot V1 (23/11)
         self.famille = AgentFamille(  # lot F1 lecture (24/11)
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
+        self.monde = AgentMonde(self)  # L1 + L2 (24/11)
+        self.notifs = AgentNotifs(self)  # L3 + L5 (24/11)
         self.bilan = AgentBilan(  # lot AA1 (24/11)
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
@@ -775,7 +779,8 @@ class Core:
         await asyncio.sleep(20)
         for f in (self.publier_etat, self.publier_etat_ia, self.publier_etat_formulaires, self.publier_suivis,
                   self.publier_budget, self.devoirs.publier, self.habitudes.publier, self.maintenance.publier,
-                  self.analyse.publier, self.veille.publier, self.famille.publier, self.publier_evolution):
+                  self.analyse.publier, self.veille.publier, self.famille.publier, self.monde.publier, self.notifs.publier,
+                  self.publier_evolution):
             try:
                 await f()
             except Exception as e:
@@ -817,6 +822,7 @@ class Core:
                                              "adria_core_procedure", "adria_core_correction", "adria_core_sens",
                                              "adria_core_analyse", "adria_core_veille",
                                              "adria_core_bilan", "adria_core_bilan_envoyer", "adria_core_famille",
+                                             "adria_core_monde", "call_service",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -887,6 +893,11 @@ class Core:
                             asyncio.create_task(self.maintenance_matin(e.get("data", {})))
                         elif e["event_type"] == "adria_core_analyse":
                             asyncio.create_task(self.analyser(e.get("data", {})))
+                        elif e["event_type"] == "call_service":
+                            if (e.get("data") or {}).get("domain") == "notify":
+                                asyncio.create_task(self.notifs.recevoir(e.get("data", {})))
+                        elif e["event_type"] == "adria_core_monde":
+                            asyncio.create_task(self.monde.calculer({**(e.get("data") or {}), "forcer": True}))
                         elif e["event_type"] == "adria_core_famille":
                             asyncio.create_task(self.famille_matin(e.get("data", {})))
                         elif e["event_type"] == "adria_core_bilan":
@@ -972,6 +983,7 @@ class Core:
                                  self.planifier("06:45", self.veiller),
                                  self.planifier(HEURE_BILAN, self.bilan_dimanche),
                                  self.planifier(HEURE_FAMILLE, self.famille_matin),
+                                 self.monde.boucle(),
                                  *(self.planifier(h, self.analyser) for h in HEURES_ANALYSE))
 
 

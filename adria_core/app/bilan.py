@@ -84,6 +84,8 @@ class AgentBilan:
         core = partie_core(c.evolution.lister("ouverte", 20), c.memoire.stats_ia_echecs(7 * 86400),
                            len((getattr(c, "analyse", None) and (c.analyse.dernier or {}).get("anomalies")) or []))
         texte = composer(self._parties(), core)
+        if getattr(c, "notifs", None):  # L5 (24/11) : ce que le Core a observé des notifications
+            texte += "\n\n🔔 Notifications\n" + c.notifs.bilan()
         res = {"quand": datetime.now(FUSEAU).isoformat(timespec="seconds"), "texte": texte, "envoye": False,
                "essai": essai}
         if not essai and await c.etat(INTERRUPTEUR) == "on":
