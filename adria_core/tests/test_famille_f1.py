@@ -74,3 +74,9 @@ def test_matin_une_notif_et_memoire(monkeypatch):
     c2 = _Core([EDT_IWAN], inter="off")
     asyncio.run(AgentFamille(c2, "notify.x").matin())
     assert not [a for a in c2.appels if a[0].startswith("/services/")]
+
+
+def test_creneau_sans_matiere():
+    s = E("sensor.ed_ryan_kerherve_emploi_du_temps_aujourd_hui", "1", **{"Journée début": "08:00", "Emploi du temps": [
+        {"start_time": "08:00", "end_time": "17:15", "lesson": " ", "is_annule": False, "is_modifie": False}]})
+    assert "08:00 créneau sans matière (jusqu'à 17:15)" in journee([s], MARDI)["texte"]

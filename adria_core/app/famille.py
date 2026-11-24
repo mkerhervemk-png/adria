@@ -62,7 +62,7 @@ def journee(etats: list[dict], maintenant: datetime) -> dict:
         tete = f"{nom} : {debut} → {fin_txt} · {len(actifs)} cours"
         details = []
         for c in cours:
-            m = (c.get("lesson") or "?").title()
+            m = (c.get("lesson") or "").strip().title() or f"créneau sans matière (jusqu'à {c.get('end_time', '?')})"
             if c.get("is_annule"):
                 details.append(f"{c.get('start_time', '')} {m} ❌ annulé")
             elif c.get("is_modifie"):
