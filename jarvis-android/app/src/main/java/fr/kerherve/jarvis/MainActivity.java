@@ -125,8 +125,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String getConfig() {
-            String j = HaClient.prefs(MainActivity.this).getString("cfg_json", null);
-            if (j != null) return j;
+            if (SecureCfg.has(MainActivity.this)) return SecureCfg.get(MainActivity.this);
             try { // migration v1.0
                 JSONObject o = new JSONObject();
                 o.put("url", HaClient.prefs(MainActivity.this).getString("url", "http://192.168.1.53:8123"));
@@ -138,7 +137,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void saveConfig(String json) {
-            HaClient.prefs(MainActivity.this).edit().putString("cfg_json", json).apply();
+            SecureCfg.put(MainActivity.this, json);
             MsgBridge.syncConfig(MainActivity.this);
         }
 

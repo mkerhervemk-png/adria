@@ -10,13 +10,14 @@ android {
         applicationId 'fr.kerherve.jarvis'
         minSdk 26
         targetSdk 35
-        versionCode 15
-        versionName '1.14'
+        versionCode 16
+        versionName '1.15'
     }
 
     signingConfigs {
         // Clé fixe fournie par les secrets GitHub (JARVIS_KEYSTORE_B64 / JARVIS_KEYSTORE_PASSWORD).
-        // Sans ces secrets, on retombe sur la clé debug de la machine de compilation.
+        // Sans ces secrets, on retombe sur la clé debug de la machine de compilation :
+        // l'APK sert alors seulement aux tests, la publication est bloquée par le workflow (fiche R4/GH-02).
         jarvis {
             def ks = System.getenv('JARVIS_KEYSTORE_PATH')
             if (ks) {
@@ -63,4 +64,5 @@ dependencies {
     implementation 'androidx.car.app:app:1.4.0'
     implementation 'androidx.core:core:1.13.1'
     implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22') // aligne kotlin-stdlib-jdk7/jdk8
+    testImplementation 'junit:junit:4.13.2'
 }

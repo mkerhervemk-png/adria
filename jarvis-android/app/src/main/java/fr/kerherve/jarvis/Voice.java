@@ -64,7 +64,7 @@ public final class Voice {
     private static boolean brigitte() {
         if (app == null) return false;
         try {
-            JSONObject o = new JSONObject(HaClient.prefs(app).getString("cfg_json", "{}"));
+            JSONObject o = new JSONObject(SecureCfg.get(app));
             return o.optBoolean("brigitte", true) && !o.optString("token", "").isEmpty();
         } catch (Exception e) { return false; }
     }

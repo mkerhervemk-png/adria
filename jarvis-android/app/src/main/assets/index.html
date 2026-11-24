@@ -173,7 +173,7 @@ body.tv .orbrow::after{content:"🎙 Dis « Alexa, demande à Adrien… »";font
 body.tv #carRight #sub{font-size:24px}
 #tvPair{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:40;background:rgba(5,10,20,.96);border:2px solid #25f4ee;border-radius:22px;padding:26px 34px;text-align:center;display:none;box-shadow:0 0 40px rgba(37,244,238,.35)}
 #tvPair.on{display:block}
-#tvPair .c{font-size:64px;font-weight:900;letter-spacing:14px;color:#25f4ee;margin:8px 0}
+#tvPair .c{font-size:52px;font-weight:900;letter-spacing:6px;color:#25f4ee;margin:8px 0;font-family:monospace}
 #tvPair .t{font-size:20px;font-weight:800}
 #tvPair .h{font-size:15px;color:var(--dim);max-width:560px;line-height:1.45}
 body:not(.tv) #tvCodeBox{display:none!important}
@@ -400,7 +400,7 @@ select.in{appearance:none;-webkit-appearance:none;
 
   <div id="tvSendBox">
     <div class="fl">📺 Adria TV (Fire TV)</div>
-    <div style="display:flex;gap:8px"><input class="in" id="cTvCode" inputmode="numeric" maxlength="4" placeholder="Code affiché sur la TV" style="flex:1">
+    <div style="display:flex;gap:8px"><input class="in" id="cTvCode" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="20" placeholder="Code TV : ABCD-EFGH-123456" style="flex:1">
     <button class="btn pri" id="bTvSend" style="flex:0 0 auto;padding:0 16px">Envoyer à la TV</button></div>
     <div class="hint">Ouvre Adria TV sur la Fire TV (même Wi-Fi), tape son code ici : adresse, jeton et agent y sont copiés.</div>
   </div>
@@ -830,8 +830,8 @@ select.in{appearance:none;-webkit-appearance:none;
 
   // ---------- Envoi de la configuration vers Adria TV ----------
   $('bTvSend').onclick = () => {
-    const c = $('cTvCode').value.replace(/\D/g,'');
-    if (c.length !== 4) { toast('Tape le code à 4 chiffres affiché sur la TV.'); return; }
+    const c = $('cTvCode').value.toUpperCase().replace(/[^0-9A-Z]/g,'');
+    if (c.length !== 14) { toast('Tape le code complet affiché sur la TV (ex. ABCD-EFGH-123456).'); return; }
     if (!A.sendToTv) { toast('Mets à jour l\'appli Adria.'); return; }
     toast('Recherche de la TV sur le Wi-Fi…'); A.sendToTv(c);
   };
@@ -883,11 +883,11 @@ select.in{appearance:none;-webkit-appearance:none;
     window.onCamera = (cam, data) => { if (cam === 'camera.cameras_de_la_cour' && al.classList.contains('on') && data) $('tvAI').src = data; prevCam(cam, data); };
     // Appairage sans clavier : code affiché, la config arrive depuis le téléphone
     const pair = document.createElement('div'); pair.id = 'tvPair';
-    pair.innerHTML = '<div class="t">Configurer Adria TV</div><div class="c" id="tvPC">····</div><div class="h">Sur ton téléphone : Adria → Réglages → <b>Adria TV</b>, tape ce code puis « Envoyer à la TV ».<br>Même Wi-Fi que la Fire TV.</div>';
+    pair.innerHTML = '<div class="t">Configurer Adria TV</div><div class="c" id="tvPC">····</div><div class="h">Sur ton téléphone : Adria → Réglages → <b>Adria TV</b>, tape ce code puis « Envoyer à la TV ».<br>Même Wi-Fi que la Fire TV. Envoi chiffré ; le code change toutes les 5 minutes.</div>';
     document.body.appendChild(pair);
     const pairTick = () => {
       let o = {}; try { o = JSON.parse(A.tvInfo ? A.tvInfo() : '{}'); } catch(e){}
-      const c = o.code || '····';
+      const c = o.code || '····-····-······';
       $('tvPC').textContent = c;
       $('tvCodeBox').style.display = 'block';
       $('tvCodeBox').innerHTML = '📺 Pas de clavier ? Code d\'appairage : <b style="color:#25f4ee;font-size:20px;letter-spacing:4px">' + c + '</b> (Adria → Réglages → Adria TV sur le téléphone)';

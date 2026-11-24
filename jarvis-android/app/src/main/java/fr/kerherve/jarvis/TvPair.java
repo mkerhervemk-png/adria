@@ -17,7 +17,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
+import java.security.KeyPair;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -28,24 +28,43 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Appairage Adria TV ← téléphone, sans clavier.
- * TV : petit serveur sur le Wi-Fi (port 8765) tant que l'appli est ouverte ; code à 4 chiffres affiché à l'écran.
- * Téléphone : cherche la TV sur le réseau local, envoie la configuration avec le code.
- * Le code change à chaque ouverture et après 5 essais faux.
+ * TV : petit serveur sur le Wi-Fi (port 8765) tant que l'appli est ouverte ; code « ABCD-EFGH-123456 » affiché.
+ * Téléphone : cherche la TV sur le réseau local, vérifie sa clé (empreinte du code) et lui envoie la
+ * configuration CHIFFRÉE (v1.15, fiche R3 : voir PairCrypto). Le jeton HA ne circule plus jamais en clair.
+ * Le code (et les clés) changent à chaque ouverture, après un appairage réussi, après 5 essais faux et
+ * au bout de 5 minutes.
  */
 public final class TvPair {
 
     public static final int PORT = 8765;
-    private static final SecureRandom RND = new SecureRandom();
+    static final long VALIDITE_MS = 5 * 60 * 1000L;
+    static final int ESSAIS_MAX = 5;
     private static volatile ServerSocket server;
     private static volatile boolean running = false;
-    private static volatile String code = "";
+    private static KeyPair cles;
+    private static String secret = "", code = "";
+    private static long expire = 0;
     private static int fails = 0;
 
     public interface OnPaired { void paired(); }
 
     // ------------------------------------------------------------------ TV
 
-    private static void newCode() { code = String.format("%04d", RND.nextInt(10000)); fails = 0; }
+    private static synchronized void newCode() {
+        try {
+            cles = PairCrypto.nouvellePaire();
+            secret = PairCrypto.secret();
+            code = PairCrypto.codeAffiche(cles.getPublic().getEncoded(), secret);
+        } catch (Exception e) {
+            cles = null; secret = ""; code = "";
+        }
+        expire = System.currentTimeMillis() + VALIDITE_MS;
+        fails = 0;
+    }
+
+    private static synchronized void verifierExpiration() {
+        if (running && System.currentTimeMillis() > expire) newCode();
+    }
 
     public static synchronized void start(Context ctx, OnPaired cb) {
         if (running) return;
@@ -74,9 +93,15 @@ public final class TvPair {
         if (ss != null) try { ss.close(); } catch (Exception ignored) { }
     }
 
-    /** Pour l'écran TV : {"code":"1234","ip":"192.168.1.x"} (code vide hors Adria TV). */
+    /** Pour l'écran TV : {"code":"ABCD-EFGH-123456","ip":"192.168.1.x","reste":s} (code vide hors Adria TV). */
     public static String info() {
-        try { return new JSONObject().put("code", running ? code : "").put("ip", localIp()).toString(); }
+        verifierExpiration();
+        try {
+            synchronized (TvPair.class) {
+                return new JSONObject().put("code", running ? code : "").put("ip", localIp())
+                        .put("reste", running ? Math.max(0, (expire - System.currentTimeMillis()) / 1000) : 0).toString();
+            }
+        }
         catch (Exception e) { return "{}"; }
     }
 
@@ -96,22 +121,13 @@ public final class TvPair {
         String body = new String(buf, 0, got);
 
         String out;
+        verifierExpiration();
         if (first.startsWith("GET /adria-tv")) {
-            out = new JSONObject().put("adria_tv", 1).put("nom", android.os.Build.MODEL).toString();
+            String pub;
+            synchronized (TvPair.class) { pub = cles == null ? "" : PairCrypto.b64(cles.getPublic().getEncoded()); }
+            out = new JSONObject().put("adria_tv", 2).put("nom", android.os.Build.MODEL).put("pub", pub).toString();
         } else if (first.startsWith("POST /pair")) {
-            JSONObject o = new JSONObject(body);
-            synchronized (TvPair.class) {
-                if (code.length() == 4 && code.equals(o.optString("code"))) {
-                    JSONObject cfg = o.getJSONObject("cfg");
-                    HaClient.prefs(c).edit().putString("cfg_json", cfg.toString()).apply();
-                    newCode();
-                    out = "{\"ok\":true}";
-                    if (cb != null) cb.paired();
-                } else {
-                    if (++fails >= 5) newCode();
-                    out = "{\"ok\":false,\"err\":\"code\"}";
-                }
-            }
+            out = recevoir(c, body, cb);
         } else out = "{}";
         byte[] b = out.getBytes(StandardCharsets.UTF_8);
         OutputStream os = s.getOutputStream();
@@ -121,40 +137,75 @@ public final class TvPair {
         os.flush();
     }
 
+    /** Déchiffre et vérifie un envoi du téléphone. Toute erreur compte comme un essai faux. */
+    static String recevoir(Context c, String body, OnPaired cb) {
+        synchronized (TvPair.class) {
+            if (cles == null) return "{\"ok\":false,\"err\":\"code\"}";
+            String cfg = null;
+            try {
+                JSONObject o = new JSONObject(body);
+                if (!o.has("ct")) return "{\"ok\":false,\"err\":\"version\"}"; // ancien envoi en clair : refusé
+                JSONObject m = new JSONObject(PairCrypto.dechiffrer(cles, o.getString("pub"), o.getString("iv"),
+                        o.getString("ct")));
+                if (PairCrypto.egal(secret, m.optString("secret"))) cfg = m.getJSONObject("cfg").toString();
+            } catch (Exception ignored) { }
+            if (cfg == null) {
+                if (++fails >= ESSAIS_MAX) newCode();
+                return "{\"ok\":false,\"err\":\"code\"}";
+            }
+            SecureCfg.put(c, cfg);
+            newCode(); // usage unique
+        }
+        if (cb != null) cb.paired();
+        return "{\"ok\":true}";
+    }
+
     // ------------------------------------------------------------- téléphone
 
-    /** Cherche Adria TV sur le Wi-Fi et lui envoie la config. Renvoie un message en français. */
-    public static String sendFromPhone(Context c, String code) {
+    /** Cherche Adria TV sur le Wi-Fi et lui envoie la config chiffrée. Renvoie un message en français. */
+    public static String sendFromPhone(Context c, String tape) {
         try {
-            String cfg = HaClient.prefs(c).getString("cfg_json", "{}");
+            String[] code = PairCrypto.lireCode(tape);
+            if (code == null) return "Tape le code complet affiché sur la TV (ex. ABCD-EFGH-123456).";
+            String cfg = SecureCfg.get(c);
             if (!new JSONObject(cfg).optString("token").startsWith("ey")) return "Enregistre d'abord les réglages sur ce téléphone.";
             String ip = localIp();
             if (ip.isEmpty()) return "Connecte le téléphone au Wi-Fi de la maison.";
             String pre = ip.substring(0, ip.lastIndexOf('.') + 1);
             ExecutorService ex = Executors.newFixedThreadPool(48);
-            List<Future<String>> fs = new ArrayList<>();
+            List<Future<String[]>> fs = new ArrayList<>();
             for (int i = 1; i < 255; i++) {
                 final String h = pre + i;
                 if (h.equals(ip)) continue;
                 fs.add(ex.submit(() -> {
                     try (Socket s = new Socket()) { s.connect(new InetSocketAddress(h, PORT), 400); }
-                    String r = http("GET", h, "/adria-tv", null);
-                    return r.contains("adria_tv") ? h : null;
+                    JSONObject r = new JSONObject(http("GET", h, "/adria-tv", null));
+                    return r.has("adria_tv") ? new String[]{h, r.optString("pub")} : null;
                 }));
             }
-            List<String> tvs = new ArrayList<>();
-            for (Future<String> f : fs) try { String h = f.get(); if (h != null) tvs.add(h); } catch (Exception ignored) { }
+            List<String[]> tvs = new ArrayList<>();
+            for (Future<String[]> f : fs) try { String[] h = f.get(); if (h != null) tvs.add(h); } catch (Exception ignored) { }
             ex.shutdownNow();
             ex.awaitTermination(1, TimeUnit.SECONDS);
             if (tvs.isEmpty()) return "Aucune Adria TV trouvée : ouvre Adria TV sur la Fire TV (même Wi-Fi) et réessaie.";
-            JSONObject body = new JSONObject().put("code", code.trim()).put("cfg", new JSONObject(cfg));
-            for (String h : tvs) {
-                String r = http("POST", h, "/pair", body.toString());
-                if (r.contains("\"ok\":true")) return "✓ Configuration envoyée à la TV (" + h + ").";
+            boolean vue = false;
+            for (String[] tv : tvs) {
+                byte[] pub;
+                try { pub = PairCrypto.deB64(tv[1]); } catch (Exception e) { continue; }
+                // Vérification de l'identité de la TV : sa clé doit correspondre au code tapé.
+                if (pub.length == 0 || !PairCrypto.egal(PairCrypto.empreinte(pub), code[0])) continue;
+                vue = true;
+                String clair = new JSONObject().put("secret", code[1]).put("cfg", new JSONObject(cfg)).toString();
+                String[] env = PairCrypto.chiffrer(pub, clair);
+                String body = new JSONObject().put("v", 2).put("pub", env[0]).put("iv", env[1]).put("ct", env[2]).toString();
+                String r = http("POST", tv[0], "/pair", body);
+                if (r.contains("\"ok\":true")) return "✓ Configuration envoyée chiffrée à la TV (" + tv[0] + ").";
             }
-            return "Code refusé : vérifie le code affiché sur la TV.";
+            if (!vue) return "Aucune TV ne correspond à ce code : vérifie le code affiché (il change toutes les 5 minutes). "
+                    + "Si Adria TV est à jour et le code juste, ne continue pas : un autre appareil se fait peut-être passer pour la TV.";
+            return "Code refusé : vérifie les 6 derniers chiffres affichés sur la TV.";
         } catch (Exception e) {
-            return "Échec de l'envoi : " + e.getMessage();
+            return "Échec de l'envoi (" + e.getClass().getSimpleName() + ").";
         }
     }
 
