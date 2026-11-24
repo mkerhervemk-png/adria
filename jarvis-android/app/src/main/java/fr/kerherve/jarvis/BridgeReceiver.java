@@ -13,7 +13,7 @@ public class BridgeReceiver extends BroadcastReceiver {
         Context c = ctx.getApplicationContext();
         String cfg = in.getStringExtra("cfg");
         if (cfg != null && cfg.startsWith("{") && cfg.length() > 2)
-            HaClient.prefs(c).edit().putString("cfg_json", cfg).apply();
+            SecureCfg.put(c, cfg);
         String cmd = String.valueOf(in.getStringExtra("cmd"));
         String text = in.getStringExtra("text");
         if (cmd.equals("avatar")) {

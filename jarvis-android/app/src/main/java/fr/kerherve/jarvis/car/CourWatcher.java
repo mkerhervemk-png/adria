@@ -8,6 +8,7 @@ import android.os.HandlerThread;
 import fr.kerherve.jarvis.HaClient;
 import fr.kerherve.jarvis.MsgBridge;
 import fr.kerherve.jarvis.Notifs;
+import fr.kerherve.jarvis.SecureCfg;
 
 import org.json.JSONObject;
 
@@ -38,7 +39,7 @@ public final class CourWatcher {
     public CourWatcher(Context c, Listener l) { this.ctx = c.getApplicationContext(); this.listener = l; }
 
     static boolean interieur(Context c) {
-        try { return new JSONObject(HaClient.prefs(c).getString("cfg_json", "{}")).optBoolean("alertIn", false); }
+        try { return new JSONObject(SecureCfg.get(c)).optBoolean("alertIn", false); }
         catch (Exception e) { return false; }
     }
 

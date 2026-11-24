@@ -1,22 +1,38 @@
 name: Build Jarvis APK
 
+# v1.15 (fiches R4/R7) : la compilation et les tests sont séparés de la publication.
+# - build   : sur PR, push et lancement manuel ; lecture seule ; aucun secret sur les PR.
+# - publish : seulement sur la branche jarvis-apk, et seulement si l'APK est signé avec la clé de
+#             production (jamais avec la clé debug). Sinon : aucune release.
 on:
   push:
     branches: [jarvis-apk]
     paths: ['jarvis-android/**', '.github/workflows/jarvis-apk.yml']
+  pull_request:
+    paths: ['jarvis-android/**', '.github/workflows/jarvis-apk.yml']
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: jarvis-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      signe: ${{ steps.signature.outputs.signe }}
+      version: ${{ steps.signature.outputs.version }}
     defaults:
       run:
         working-directory: jarvis-android
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -24,7 +40,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
-      - name: Clé de signature fixe (si les secrets existent)
+      - name: Clé de signature (uniquement hors PR, si les secrets existent)
+        if: github.event_name != 'pull_request'
         env:
           B64: ${{ secrets.JARVIS_KEYSTORE_B64 }}
         run: |
@@ -33,11 +50,13 @@ jobs:
             echo "JARVIS_KEYSTORE_PATH=$RUNNER_TEMP/jarvis.keystore" >> "$GITHUB_ENV"
             echo "Signature : clé fixe Jarvis"
           else
-            echo "::warning::Secrets JARVIS_KEYSTORE_* absents : signature debug (mise à jour = désinstaller d'abord)"
+            echo "::warning::Secrets JARVIS_KEYSTORE_* absents : signature debug, publication bloquée"
           fi
+      - name: Tests unitaires (appairage chiffré)
+        run: gradle --no-daemon testAdriaReleaseUnitTest
       - name: Build APK
         env:
-          JARVIS_KEYSTORE_PASSWORD: ${{ secrets.JARVIS_KEYSTORE_PASSWORD }}
+          JARVIS_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.JARVIS_KEYSTORE_PASSWORD || '' }}
         run: gradle --no-daemon assembleRelease
       - name: Rename
         run: |
@@ -45,13 +64,40 @@ jobs:
           cp app/build/outputs/apk/messages/release/app-messages-release.apk Adria-Messages.apk
           cp app/build/outputs/apk/holo/release/app-holo-release.apk Adria-Hologramme.apk
           cp app/build/outputs/apk/tv/release/app-tv-release.apk Adria-TV.apk
+      - name: Vérifier la signature (debug = pas de publication)
+        id: signature
+        run: |
+          SIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          signe=true
+          for f in Adria*.apk; do
+            certs=$("$SIGNER" verify --print-certs "$f") || { echo "::error::$f : signature invalide"; signe=false; continue; }
+            if echo "$certs" | grep -qi "CN=Android Debug"; then
+              echo "::warning::$f signé avec la clé debug"; signe=false
+            fi
+          done
+          [ -n "$JARVIS_KEYSTORE_PATH" ] || signe=false
+          echo "signe=$signe" >> "$GITHUB_OUTPUT"
+          echo "version=$(grep -oP "versionName '\K[^']+" app/build.gradle)" >> "$GITHUB_OUTPUT"
+          rm -f "$RUNNER_TEMP/jarvis.keystore"
       - uses: actions/upload-artifact@v4
         with:
           name: Jarvis-apk
           path: jarvis-android/Adria*.apk
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/jarvis-apk' && needs.build.outputs.signe == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Jarvis-apk
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          TAG="adria-v1.14-${{ github.run_number }}"
-          gh release create "$TAG" Adria.apk Adria-Messages.apk Adria-Hologramme.apk Adria-TV.apk --target "${{ github.sha }}" --title "Adria $TAG" --notes "APK Jarvis (signature debug, sideload)." --prerelease
+          TAG="adria-v${{ needs.build.outputs.version }}-${{ github.run_number }}"
+          gh release create "$TAG" Adria.apk Adria-Messages.apk Adria-Hologramme.apk Adria-TV.apk --target "${{ github.sha }}" --title "Adria $TAG" --notes "APK Jarvis signés avec la clé de production (sideload)." --prerelease

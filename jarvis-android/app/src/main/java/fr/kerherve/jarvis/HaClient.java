@@ -39,10 +39,10 @@ public final class HaClient {
         return c.getSharedPreferences("jarvis", Context.MODE_PRIVATE);
     }
 
-    /** Lit la configuration enregistrée par l'interface (cfg_json). */
+    /** Lit la configuration enregistrée par l'interface (chiffrée, SecureCfg). */
     public static HaClient from(Context c) {
         try {
-            JSONObject o = new JSONObject(prefs(c).getString("cfg_json", "{}"));
+            JSONObject o = new JSONObject(SecureCfg.get(c));
             return new HaClient(norm(o.optString("url", "http://192.168.1.53:8123")), norm(o.optString("urlExt", "")),
                     o.optString("token", ""), o.optString("agent", "adria"), o.optString("who", "Mael"));
         } catch (Exception e) {

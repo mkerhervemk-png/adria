@@ -33,7 +33,7 @@ public final class MsgBridge {
                 .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
                 .putExtra("cmd", cmd)
                 .putExtra("text", text == null ? "" : text)
-                .putExtra("cfg", HaClient.prefs(c).getString("cfg_json", "{}"));
+                .putExtra("cfg", SecureCfg.get(c));
         c.sendBroadcast(i);
         return true;
     }
