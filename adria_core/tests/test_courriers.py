@@ -168,3 +168,17 @@ def test_repli_reply_sans_tag():
         agent.recevoir_action({"action": "REPLY", "reply_text": " 25/12 "})
         return await fut
     assert asyncio.run(scenario()) == "25/12"
+
+
+def test_rappel_j3_agenda_absent_sans_plantage():
+    class Absent(FauxCore):
+        async def appel(self, methode, chemin, donnees=None, delai=60):
+            if "get_events" in chemin:
+                self.appels.append((chemin, donnees))
+                raise RuntimeError("500, message='Internal Server Error'")
+            return await super().appel(methode, chemin, donnees, delai)
+    ha = Absent("")
+    agent = C.AgentCourriers(ha, F.AgentFormulaires(ha), "notify.tel")
+    agent.PAUSE_RAPPEL = 0
+    assert asyncio.run(agent.rappeler(J)) == 0
+    assert len([c for c, _ in ha.appels if "get_events" in c]) == 3

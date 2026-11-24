@@ -400,15 +400,28 @@ class AgentCourriers:
         self.dernier = res
         return res
 
+    ESSAIS_RAPPEL, PAUSE_RAPPEL = 3, 600  # 3 essais espacés de 10 min
+
     # ---- rappel J-3 (relit l'agenda : rien à retenir, survit aux redémarrages)
     async def rappeler(self, aujourdhui: date | None = None) -> int:
         if await self.ha.etat("input_boolean.adria_core_courriers") != "on":
             return 0
         cible = (aujourdhui or date.today()) + timedelta(days=3)
-        rep = await self.ha.appel("POST", "/services/calendar/get_events?return_response", {
-            "entity_id": self.calendrier,
-            "start_date_time": f"{cible.isoformat()} 00:00:00",
-            "end_date_time": f"{(cible + timedelta(days=1)).isoformat()} 00:00:00"})
+        rep = None
+        for essai in range(self.ESSAIS_RAPPEL):  # agenda parfois absent (Google/DNS) : on réessaie
+            try:
+                rep = await self.ha.appel("POST", "/services/calendar/get_events?return_response", {
+                    "entity_id": self.calendrier,
+                    "start_date_time": f"{cible.isoformat()} 00:00:00",
+                    "end_date_time": f"{(cible + timedelta(days=1)).isoformat()} 00:00:00"})
+                break
+            except Exception as e:
+                LOG.warning("Rappel J-3 : agenda %s indisponible (%s), essai %s/%s",
+                            self.calendrier, str(e)[:60], essai + 1, self.ESSAIS_RAPPEL)
+                if essai + 1 < self.ESSAIS_RAPPEL:
+                    await asyncio.sleep(self.PAUSE_RAPPEL)
+        if rep is None:
+            return 0
         evs = ((rep.get("service_response") or {}).get(self.calendrier) or {}).get("events") or []
         titres = rappels_du_jour(evs)
         if titres:

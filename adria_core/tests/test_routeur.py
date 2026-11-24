@@ -4,7 +4,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
-from routeur import REPLI, CoupeCircuit, Routeur, nettoyer_ollama, reponse_valide  # noqa: E402
+from routeur import REPLI, CoupeCircuit, Routeur, Surcharge, nettoyer_ollama, ordonner, reponse_valide  # noqa: E402
+
+
+Routeur.PAUSE_REESSAI = 0  # pas d'attente de 2 s dans les tests
 
 
 class FauxHA:
@@ -59,7 +62,7 @@ def test_gemini_ok_et_compteur():
 def test_voix_gemini_lent_bascule_lite(monkeypatch):
     import routeur
     monkeypatch.setitem(routeur.CHAINES, "interactif", [("gemini", 0.05), ("gemini_lite", 0.5),
-                                                         ("claude", 0.5), ("ollama", 0.5)])
+                                                         ("claude", 0.5)])
     ha = FauxHA({"gemini": "trop tard", "gemini_lite": "Lite"}, lenteurs={"gemini": 0.3})
     r = lancer(Routeur(ha).demander("Q", "interactif"))
     assert r["moteur"] == "gemini_lite"
@@ -68,7 +71,7 @@ def test_voix_gemini_lent_bascule_lite(monkeypatch):
 
 def test_claude_coupe_saute_et_ollama_prompt_secours():
     ha = FauxHA({"gemini": "", "gemini_lite": "Error 503", "ollama": "<think>x</think>Réponse locale"})
-    r = lancer(Routeur(ha).demander("LONG PROMPT", "interactif", prompt_secours="COURT"))
+    r = lancer(Routeur(ha).demander("LONG PROMPT", "profond", prompt_secours="COURT"))
     assert r["moteur"] == "ollama" and r["data"] == "Réponse locale"
     assert "claude" not in [a[0] for a in ha.appels]
     assert ha.appels[-1][1].startswith("COURT") and "/no_think" in ha.appels[-1][1]
@@ -146,3 +149,58 @@ def test_echecs_par_raison():
     e = m.stats_ia_echecs(10_000, maintenant=2000)
     assert e["gemini"] == {"trop lent (> 12 s)": 2}
     assert list(e["ollama"].values()) == [1] and len(list(e["ollama"])[0]) <= 40
+
+
+def test_r3_ollama_hors_de_la_voix():
+    ha = FauxHA({"gemini": "", "gemini_lite": "", "ollama": "Réponse locale"})
+    r = lancer(Routeur(ha).demander("Q", "interactif"))
+    assert not r["ok"] and "ollama" not in [a[0] for a in ha.appels]
+
+
+def test_r3_reessai_unique_sur_503():
+    class Flanche(FauxHA):
+        n = 0
+
+        async def ai_task(self, entite, prompt, tache):
+            if entite == "ai_task.google_ai_task_5":
+                Flanche.n += 1
+                self.appels.append(("gemini", prompt))
+                if Flanche.n == 1:
+                    raise RuntimeError("503, message='Service Unavailable'")
+                return "Re-OK"
+            return await super().ai_task(entite, prompt, tache)
+    ha = Flanche({})
+    r = lancer(Routeur(ha).demander("Q", "interactif"))
+    assert r["moteur"] == "gemini" and r["data"] == "Re-OK"
+    assert [a[0] for a in ha.appels] == ["gemini", "gemini"]
+
+
+def test_r3_lent_pas_de_reessai():
+    ha = FauxHA({"gemini": "", "gemini_lite": "Lite"})
+    lancer(Routeur(ha).demander("Q", "interactif"))
+    assert [a[0] for a in ha.appels].count("gemini") == 1  # réponse vide : pas de nouvel essai
+
+
+def test_r3_surcharge_lite_devant():
+    s = Surcharge()
+    assert not s.noter(0) and not s.noter(100)
+    assert s.noter(200) and s.active(1000) and not s.active(2001)
+    s2 = Surcharge()
+    s2.noter(0); s2.noter(100)
+    assert not s2.noter(1901)  # hors de la fenêtre de 30 min
+    ch = [("gemini", 12), ("gemini_lite", 8), ("claude", 15)]
+    assert ordonner(ch, True, "interactif")[0][0] == "gemini_lite"
+    assert ordonner(ch, False, "interactif") == ch
+    assert ordonner(ch, True, "profond") == ch
+
+
+def test_r3_routeur_bascule_apres_3_erreurs_500():
+    ha = FauxHA({"gemini": RuntimeError("500, message='Internal Server Error'"),
+                 "gemini_lite": "Lite"})
+    rt = Routeur(ha, coupe_circuit=CoupeCircuit(echecs=99))
+    for _ in range(3):
+        lancer(rt.demander("Q", "interactif"))
+    assert rt.surcharge.active() and rt.surcharge.reste() > 0
+    ha.appels.clear()
+    r = lancer(rt.demander("Q", "interactif"))
+    assert r["moteur"] == "gemini_lite" and [a[0] for a in ha.appels] == ["gemini_lite"]

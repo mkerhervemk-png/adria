@@ -1,12 +1,16 @@
 """Routeur IA d'ADRIA (sans IA lui-même) : choisit le moteur, borne les délais.
 
 Chaîne identique au routeur YAML du 11/11 :
-- interactif (voix) : Gemini 12 s -> Gemini Lite 8 s -> [Claude 15 s] -> Ollama 18 s -> repli
+- interactif (voix) : Gemini 12 s -> Gemini Lite 8 s -> [Claude 15 s] -> repli
+  (Ollama retiré de la voix le 24/11, R3 : 0 réponse dans les 18 s en 7 jours)
 - rapide (défaut)   : Gemini 60 s -> nouvel essai 45 s plus tard -> [Claude] -> Gemini Lite 20 s -> Ollama 90 s
 - profond           : [Claude] -> Gemini 60 s -> Gemini Lite 20 s -> Ollama 90 s
 [Claude] seulement si input_boolean.adria_claude_actif est ON.
 
 Coupe-circuit : un moteur qui échoue 3 fois en 10 min est sauté 15 min.
+Surcharge Gemini (R3, 24/11) : une erreur 500/503 rapide est réessayée une fois après 2 s ;
+3 erreurs 500/503 en 30 min -> Gemini Lite passe devant Gemini pendant 30 min
+(voix et rapide ; le mode profond garde son ordre).
 Gemini, Gemini Lite et Claude passent par Home Assistant (ai_task) ; Ollama est
 appelé en direct, ce qui permet de l'arrêter vraiment au délai.
 """
@@ -26,7 +30,7 @@ ENTITES = {
     "claude": "ai_task.claude_ai_task",
 }
 CHAINES = {
-    "interactif": [("gemini", 12), ("gemini_lite", 8), ("claude", 15), ("ollama", 18)],
+    "interactif": [("gemini", 12), ("gemini_lite", 8), ("claude", 15)],
     "rapide": [("gemini", 60), ("pause", 45), ("gemini", 60), ("claude", 60),
                ("gemini_lite", 20), ("ollama", 90)],
     "profond": [("claude", 60), ("gemini", 60), ("gemini_lite", 20), ("ollama", 90)],
@@ -38,6 +42,9 @@ CONSIGNE_OLLAMA = {
              "format et le nombre de lignes demandes, aucune phrase d'introduction, aucun "
              "raisonnement.] /no_think",
 }
+
+
+SURCHARGE = re.compile(r"\b50[03]\b")
 
 
 def nettoyer_ollama(texte: str) -> str:
@@ -83,13 +90,52 @@ class CoupeCircuit:
         return {m: int(f - t) for m, f in self.ouvert_jusqu_a.items() if f > t}
 
 
+class Surcharge:
+    """Gemini saturé côté Google : 3 erreurs 500/503 en 30 min -> Lite devant pendant 30 min."""
+
+    def __init__(self, erreurs: int = 3, fenetre: float = 1800, duree: float = 1800):
+        self.erreurs, self.fenetre, self.duree = erreurs, fenetre, duree
+        self.historique: deque = deque()
+        self.jusqu_a = 0.0
+
+    def noter(self, maintenant: float | None = None) -> bool:
+        t = time.time() if maintenant is None else maintenant
+        self.historique.append(t)
+        while self.historique and t - self.historique[0] > self.fenetre:
+            self.historique.popleft()
+        if len(self.historique) >= self.erreurs and t >= self.jusqu_a:
+            self.jusqu_a = t + self.duree
+            self.historique.clear()
+            return True
+        return False
+
+    def active(self, maintenant: float | None = None) -> bool:
+        return (time.time() if maintenant is None else maintenant) < self.jusqu_a
+
+    def reste(self, maintenant: float | None = None) -> int:
+        t = time.time() if maintenant is None else maintenant
+        return max(0, int(self.jusqu_a - t))
+
+
+def ordonner(chaine: list, surcharge: bool, prof: str) -> list:
+    """En surcharge, Gemini Lite passe en tête (sauf mode profond)."""
+    if not surcharge or prof == "profond" or not any(m == "gemini_lite" for m, _ in chaine):
+        return chaine
+    lite = [e for e in chaine if e[0] == "gemini_lite"][:1]
+    return lite + [e for e in chaine if e[0] != "gemini_lite"]
+
+
 class Routeur:
     """`ha` doit fournir : etat(entity_id) -> str|None, ai_task(entite, prompt, tache) -> str,
     ollama(prompt) -> str, statut(texte), incrementer(counter), noter(moteur, prof, ok, duree, raison)."""
 
-    def __init__(self, ha, coupe_circuit: CoupeCircuit | None = None):
+    PAUSE_REESSAI = 2.0  # secondes avant le nouvel essai sur erreur 500/503 rapide
+
+    def __init__(self, ha, coupe_circuit: CoupeCircuit | None = None,
+                 surcharge: Surcharge | None = None):
         self.ha = ha
         self.cc = coupe_circuit or CoupeCircuit()
+        self.surcharge = surcharge or Surcharge()
 
     async def autorise(self, moteur: str, force_gemini: bool) -> str | None:
         """Renvoie la raison de sauter le moteur, ou None s'il peut être utilisé."""
@@ -111,6 +157,20 @@ class Routeur:
             return nettoyer_ollama(await self.ha.ollama(prompt))
         return await self.ha.ai_task(ENTITES[moteur], prompt, f"{tache}_{moteur}")
 
+    @staticmethod
+    def erreur_surcharge(raison: str | None) -> bool:
+        return bool(raison and raison.startswith("erreur") and SURCHARGE.search(raison))
+
+    async def essayer(self, moteur: str, prompt: str, tache: str, delai: float):
+        try:
+            rep = await asyncio.wait_for(self.appeler(moteur, prompt, tache), delai)
+            ok = reponse_valide(rep, moteur)
+            return rep, ok, (None if ok else "réponse vide ou invalide")
+        except asyncio.TimeoutError:
+            return "", False, f"trop lent (> {delai} s)"
+        except Exception as e:  # erreur réseau, service absent…
+            return "", False, f"erreur : {str(e)[:80]}"
+
     async def demander(self, prompt: str, profondeur: str = "rapide", tache: str = "adria",
                        prompt_secours: str = "", force_gemini: bool = False,
                        seulement: str = "") -> dict:
@@ -119,6 +179,8 @@ class Routeur:
         if seulement:  # mode test : un seul moteur, délai le plus long prévu pour lui
             delais = [d for m, d in sum(CHAINES.values(), []) if m == seulement]
             chaine = [(seulement, max(delais))] if delais else []
+        else:
+            chaine = ordonner(chaine, self.surcharge.active(), prof)
         essais = []
         for moteur, delai in chaine:
             if moteur == "pause":  # nouvel essai Gemini seulement s'il a vraiment été appelé
@@ -134,14 +196,14 @@ class Routeur:
                 base = prompt_secours.strip() or prompt
                 texte_prompt = base[:3000] + CONSIGNE_OLLAMA["interactif" if prof == "interactif" else "autre"]
             debut = time.monotonic()
-            try:
-                rep = await asyncio.wait_for(self.appeler(moteur, texte_prompt, tache), delai)
-                ok = reponse_valide(rep, moteur)
-                raison = None if ok else "réponse vide ou invalide"
-            except asyncio.TimeoutError:
-                rep, ok, raison = "", False, f"trop lent (> {delai} s)"
-            except Exception as e:  # erreur réseau, service absent…
-                rep, ok, raison = "", False, f"erreur : {str(e)[:80]}"
+            rep, ok, raison = await self.essayer(moteur, texte_prompt, tache, delai)
+            if (not ok and moteur.startswith("gemini") and self.erreur_surcharge(raison)
+                    and time.monotonic() - debut < 3 and not seulement):
+                await asyncio.sleep(self.PAUSE_REESSAI)  # Google saturé : un seul nouvel essai
+                rep, ok, raison = await self.essayer(moteur, texte_prompt, tache, delai)
+            if not ok and moteur == "gemini" and self.erreur_surcharge(raison):
+                if self.surcharge.noter():
+                    raison += " -> Lite devant 30 min"
             duree = round(time.monotonic() - debut, 1)
             await self.ha.noter(moteur, prof, ok, duree, raison)
             if ok:
