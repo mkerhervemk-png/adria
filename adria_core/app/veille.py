@@ -44,6 +44,13 @@ def resumer(etats: list[dict]) -> dict:
     if m not in INCONNU:
         temp = at(METEO).get("temperature")
         points.append(f"Météo : {m}" + (f", {temp} °C" if temp is not None else ""))
+        try:  # 24/11 : reprend « Conseil énergie temps froid » (IA) sans IA
+            if temp is not None and float(temp) < 5:
+                points.append("Froid : grouper lave-linge et sèche-linge"
+                              + (" hors jour rouge" if t in ("blanc", "rouge") else "")
+                              + ", vérifier la charge de l'Inster")
+        except (TypeError, ValueError):
+            pass
     c = st(COLIS)
     try:
         if c not in INCONNU and int(float(c)) > 0:

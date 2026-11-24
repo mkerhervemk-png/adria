@@ -93,3 +93,58 @@ def test_veille_resume_et_memoire():
 
 def test_veille_rien():
     assert resumer([])["texte"] == "rien de particulier"
+
+
+# --- v0.19.0 : bilan du dimanche (AA1) + froid dans la veille ---------------
+from bilan import AgentBilan, composer, partie_core  # noqa: E402
+
+
+def test_veille_froid():
+    r = resumer([E("weather.meteo_france_forecast_for_city_saint_brieuc_bretagne_22_fr_saint_brieuc", "cloudy",
+                   temperature=2.5), E("input_select.tempo_couleur_du_jour", "blanc")])
+    assert any(p.startswith("Froid") and "hors jour rouge" in p for p in r["points"])
+    r2 = resumer([E("weather.meteo_france_forecast_for_city_saint_brieuc_bretagne_22_fr_saint_brieuc", "sunny",
+                    temperature=12)])
+    assert not any(p.startswith("Froid") for p in r2["points"])
+
+
+def test_composer_et_partie_manquante():
+    t = composer({"confiance": {"texte": "Aucun mandat actif."}}, partie_core([], {"gemini": {"x": 2, "y": 1}}, 0))
+    assert "Aucun mandat actif." in t and "(non reçue)" in t and "gemini 3" in t
+
+
+class _Evo:
+    def lister(self, statut=None, n=20):
+        return [{"erreur": "routeur lent"}]
+
+
+class _MemB(_Mem):
+    def stats_ia_echecs(self, s):
+        return {}
+
+
+def test_bilan_recoit_et_envoie_une_seule_notif():
+    c = _Core([])
+    c.memoire = _MemB()
+    c.evolution = _Evo()
+    b = AgentBilan(c, "notify.mobile_app_x")
+    b.recevoir({"partie": "confiance", "texte": "2 mandats"})
+    b.recevoir({"partie": "qualite", "texte": "Autotest tout bon"})
+    b.recevoir({"partie": "pirate", "texte": "x"})  # ignorée
+    r = asyncio.run(b.envoyer({"essai": "true"}))
+    assert "2 mandats" in r["texte"] and "Autotest tout bon" in r["texte"] and "routeur lent" in r["texte"]
+    assert not r["envoye"] and not c.appels  # essai : pas de notification
+    import bilan as B
+    from datetime import datetime as _dt
+
+    class _D(_dt):
+        @classmethod
+        def now(cls, tz=None):
+            return _dt(2026, 11, 29, 19, 45, tzinfo=tz)  # un dimanche
+    B.datetime, ancien = _D, B.datetime
+    try:
+        b.recevoir({"partie": "confiance", "texte": "2 mandats"})
+        r2 = asyncio.run(b.envoyer())
+    finally:
+        B.datetime = ancien
+    assert r2["envoye"] and len([x for x in c.appels if x[0].startswith("/services/notify")]) == 1
