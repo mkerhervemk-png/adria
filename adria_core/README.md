@@ -1,8 +1,80 @@
-# ADRIA Core (v0.4.1)
+# ADRIA Core (v0.21.2)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
-Mémoire longue d'ADRIA, sans IA.
+Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par mots et par le sens),
+routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
+échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
+et bus MCP en lecture seule.
+
+## Nouveau en 0.21.2 — sécurité (dossier de remédiation du 24/11/2026)
+
+- **R1 — mémoire cloisonnée par profil, côté serveur** (`app/confidentialite.py`). Profils `adulte`, `enfant`,
+  `inconnu`. Les profils restreints lisent seulement une liste blanche de sources (refus par défaut : une
+  source nouvelle est fermée). Le client ne peut qu'exclure *plus*, jamais moins. Double barrière : avant la
+  requête (exclusions) et après (filtre des lignes, recherche par le sens comprise).
+  - Événement HA `adria_core_recherche` : champ `profil` (facultatif). Sans lui, l'ancien
+    `script.adria_core_chercher` (`restreint: true` → exclusion de la mémoire perso) est reconnu et traité
+    comme `inconnu`, le plus strict. Sans exclusion : `adulte`, comme avant.
+  - MCP : chaque jeton porte un profil (option `mcp_jetons`). Un jeton sans profil valide est refusé.
+    L'ancien `mcp_jeton` reste accepté avec le profil `mcp_jeton_profil` (`adulte` si absent).
+    `carnet_dernier` et `habitudes` sont réservés au profil `adulte`.
+- **R2 — consolidation** : `forcer=true` ne contourne plus `input_boolean.adria_core_consolidation`.
+  Tout est préparé sans écrire (tri, IA, garde-fou, interdits) ; les deux interrupteurs sont relus juste
+  avant l'écriture ; les nouveaux faits sont ajoutés d'abord, et retirés si un ajout échoue (compensation),
+  avant de toucher aux anciens.
+- **R5 — purge** : `essai: true` est une simulation stricte (aucune écriture SQLite, aucune suppression,
+  `sensor.adria_core` inchangé). Le rapport (`retirees`, `a_copier`, `gardees_sans_copie`, `operations`,
+  `erreurs`) arrive par l'événement `adria_core_purge_resultat`.
+- **R6 — interdits** : une seule liste de sujets interdits (décision du 13/10) avec synonymes et
+  reformulations, comparée sans accents ni ponctuation, appliquée avant toute écriture.
+- **R7 — CI** : `.github/workflows/adria-core-tests.yml` lance l'analyse et tous les tests à chaque PR ;
+  un test qui échoue bloque. Aucune publication depuis ce workflow.
+
+## Interrupteurs (Home Assistant)
+
+Chaque fonction a son `input_boolean.adria_core_*` ; OFF = la fonction ne fait rien. Une lecture de HA
+impossible compte comme OFF. Principaux garde-fous :
+
+| Interrupteur | Rôle |
+|---|---|
+| `adria_core_purge` | autorise la purge réelle des listes HA (03h30) |
+| `adria_core_consolidation` | maître de la consolidation de nuit (essai si seul) |
+| `adria_core_consolidation_reelle` | avec le maître : écriture réelle dans `todo.adria_memoire` |
+| `adria_core_memoire` | carnet de bord du soir |
+| `adria_core_sens` | recherche et indexation par le sens (BGE-M3 via Ollama) |
+| `adria_core_procedures` | mémoire des procédures |
+
+Autres : `analyse`, `bilan`, `budget`, `classement`, `competences`, `courriers`, `devoirs`, `famille`,
+`formulaires`, `general`, `habitudes`, `journal`, `maintenance`, `menus`, `monde`, `notifications`,
+`papiers`, `passe`, `suivis`, `veille`.
+
+## Prérequis et compatibilité
+
+- Home Assistant OS ou Supervised (appli Supervisor, `homeassistant_api: true`), architecture amd64.
+- Facultatif : Ollama (`ollama_url`) pour le secours IA et la recherche par le sens.
+- Python des tests : 3.11+ avec `aiohttp`, `pypdf`, `reportlab`, `pytest` ; `poppler-utils` pour les PDF.
+
+## Sauvegarde et restauration
+
+- La base est `/data/adria_core.db` de l'appli : elle est incluse dans une sauvegarde HA de l'appli
+  « ADRIA Core » (sauvegarde partielle possible).
+- Avant une mise à jour : sauvegarde partielle de l'appli, puis vérifier qu'elle apparaît dans la liste.
+- Restaurer : arrêter l'appli, restaurer la sauvegarde partielle, redémarrer, vérifier `sensor.adria_core`
+  (état `ok`, `lignes`, `version`). Ne jamais copier une ancienne base par-dessus la base active pendant
+  que l'appli tourne.
+- Retour à la version précédente : réinstaller le dossier `adria_core` de la version d'avant (tag ou
+  commit) puis restaurer la sauvegarde partielle prise avant la mise à jour.
+
+## Limites connues
+
+- Le profil reçu par l'événement HA repose sur ce qu'envoie HA (bus interne, réservé aux utilisateurs et
+  intégrations de HA) : la reconnaissance de la voix reste faite par HA.
+- La compensation de la consolidation retire les faits ajoutés par leur texte : un fait identique déjà
+  présent pourrait être retiré à sa place (le contenu reste le même).
+- Les interdits restent une liste de motifs : un sujet vraiment nouveau doit y être ajouté.
+
+## Historique
 
 Nouveau en 0.4.1 — filet de sécurité : signal de vie (attribut `battement` de `sensor.adria_core_ia`, chaque minute ; HA saute le Core s'il a plus de 3 min) ; mode test `seulement: <moteur>` dans `adria_core_ia`.
 
@@ -51,7 +123,8 @@ event_data:
   req_id: "abc123"
   question: "qu'avait-on décidé pour le préchauffage ?"
   n: 5
-  exclure_sources: [adria_memoire_perso]   # facultatif
+  profil: adulte                           # adulte | enfant | inconnu (0.21.2)
+  exclure_sources: [adria_memoire_perso]   # facultatif : exclusions EN PLUS de la politique
 ```
 
 Réponse : événement `adria_core_resultat` avec `req_id`, `ok`, `lignes` (source, date, texte, detail) et `texte` (2 000 caractères maximum).
@@ -60,7 +133,9 @@ Forcer une synchronisation : événement `adria_core_synchroniser`.
 
 ## Confidentialité
 
-La mémoire personnelle (`adria_memoire_perso`) contient des lignes par personne. Pour un enfant ou une voix inconnue, l'appelant doit passer `exclure_sources: [adria_memoire_perso]`.
+Depuis 0.21.2, c'est le Core qui décide (voir R1 plus haut et `app/confidentialite.py`). L'appelant
+indique le profil (`profil: adulte|enfant|inconnu`) ; `exclure_sources` peut seulement retirer des sources
+en plus. Listes blanches modifiables par les options `memoire_sources_enfant` et `memoire_sources_inconnu`.
 
 ## Tests
 

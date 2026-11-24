@@ -1,0 +1,70 @@
+name: ADRIA Core — tests
+
+# Validation seulement (fiche R7) : aucune publication, aucun secret, lecture seule du dépôt.
+on:
+  pull_request:
+    paths: ['adria_core/**', '.github/workflows/adria-core-tests.yml']
+  push:
+    branches: [adria-core]
+    paths: ['adria_core/**', '.github/workflows/adria-core-tests.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adria-core-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: adria_core
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Outils d'analyse
+        run: pip install ruff==0.8.* pyyaml==6.*
+      - name: Format et analyse statique (erreurs bloquantes)
+        run: ruff check --select E9,F63,F7,F82 app tests
+      - name: Contrôle de la configuration
+        run: |
+          python - <<'EOF'
+          import re, yaml
+          cfg = yaml.safe_load(open("config.yaml", encoding="utf-8"))
+          code = open("app/main.py", encoding="utf-8").read()
+          v = re.search(r'^VERSION = "([^"]+)"', code, re.M).group(1)
+          assert cfg["version"] == v, f"config.yaml {cfg['version']} != main.py {v}"
+          readme = open("README.md", encoding="utf-8").readline()
+          assert f"v{v}" in readme, f"README annonce {readme.strip()} au lieu de v{v}"
+          for k in cfg["options"]:
+              assert k in cfg["schema"], f"option {k} absente du schéma"
+          print("configuration cohérente :", v)
+          EOF
+      # Installation reproductible : les tests tournent DANS l'image de l'appli (même Dockerfile, même
+      # Alpine, mêmes poppler/pypdf/reportlab qu'en production), pas sur l'Ubuntu du runner.
+      - name: Image de l'appli (Dockerfile)
+        run: docker build -t adria-core-test .
+      - name: Tests de sécurité (P1, bloquants)
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src adria-core-test sh -c
+          "apk add --no-cache py3-pytest py3-pytest-cov >/dev/null &&
+          python3 -m pytest -q -p no:cacheprovider tests/test_securite_v0212.py tests/test_purge_garde.py tests/test_consolidation.py"
+      - name: Tous les tests + couverture
+        run: >-
+          docker run --rm -v "$PWD":/src -w /src adria-core-test sh -c
+          "apk add --no-cache py3-pytest py3-pytest-cov >/dev/null &&
+          python3 -m pytest -q -p no:cacheprovider --cov=app --cov-report=term --cov-report=xml tests"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: couverture-adria-core
+          path: adria_core/coverage.xml
+          if-no-files-found: ignore

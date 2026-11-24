@@ -8,14 +8,21 @@ Réel (v0.18.0, 23/11, validé par Mael) : si input_boolean.adria_core_consolida
 le Core écrit dans todo.adria_memoire exactement comme le script HA (les anciens faits passent en
 « terminé », jamais effacés sans copie dans la base du Core ; les nouveaux faits sont ajoutés).
 Le script HA de 02h30 ne tourne plus que si le Core n'a pas réussi cette nuit (secours).
+v0.21.2 (R2) : plus de contournement par forcer=true ; préparation complète avant écriture ;
+interdits contrôlés par confidentialite.sujet_interdit (synonymes, reformulations) — R6.
 """
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 
+import confidentialite as CF
 from memoire_agent import items as liste_items
 
+LOG = logging.getLogger("adria_core.consolidation")
 LISTE = "todo.adria_memoire"
+MAITRE = "input_boolean.adria_core_consolidation"
+REEL = "input_boolean.adria_core_consolidation_reelle"
 
 COURTES = ["input_text.avatar_memoire_apprentissages", "input_text.avatar_memoire_patterns",
            "input_text.adria_mem_decisions", "input_text.adria_raisons_refus_recents",
@@ -168,7 +175,7 @@ def interdits_recrees(lignes: list[dict]) -> list[str]:
     out = []
     for l in lignes:
         f = l["fait"].lower()
-        if any(re.search(rf"\b{re.escape(m)}\b", f) for m in INTERDITS):
+        if any(re.search(rf"\b{re.escape(m)}\b", f) for m in INTERDITS) or CF.sujet_interdit(l["fait"]):
             out.append(l["fait"][:80])
     return out
 
@@ -206,57 +213,87 @@ class AgentConsolidation:
         except Exception:
             return False
 
-    async def _retirer_termines(self) -> int:
-        """Comme todo.remove_completed_items du script HA, mais seulement les lignes copiées dans le Core."""
-        try:
-            rep = await self.core.appel("POST", "/services/todo/get_items?return_response",
-                                        {"entity_id": LISTE, "status": "completed"})
-        except Exception:
-            return 0
-        ok = [i["uid"] for i in liste_items(rep, LISTE)
-              if i.get("uid") and self.core.memoire.a_la_copie("adria_memoire", i)]
-        for k in range(0, len(ok), 50):
-            await self._todo("remove_item", {"item": ok[k:k + 50]})
-        return len(ok)
+    async def _termines_copies(self) -> list[str]:
+        """Comme todo.remove_completed_items du script HA, mais seulement les lignes copiées dans le Core.
+        Lecture seule : renvoie les uid à retirer (l'écriture est faite dans _appliquer)."""
+        rep = await self.core.appel("POST", "/services/todo/get_items?return_response",
+                                    {"entity_id": LISTE, "status": "completed"})
+        return [i["uid"] for i in liste_items(rep, LISTE)
+                if i.get("uid") and self.core.memoire.a_la_copie("adria_memoire", i)]
 
-    async def _ecrire_tri(self, tri: dict) -> int:
-        n = 0
-        for uid in tri["obs_vieilles"] + tri["res_vieux"]:
-            n += await self._todo("update_item", {"item": uid, "status": "completed"})
-        for p in tri["promouvoir"]:
-            n += await self._todo("update_item", {"item": p["uid"], "rename": p["s"], "description": p["d"]})
-        return n
+    async def _interrupteurs(self) -> tuple[bool, bool]:
+        """(maître ON, réel ON). Lecture HA impossible (None) = OFF : le garde-fou se ferme."""
+        maitre = await self.core.etat(MAITRE) == "on"
+        reel = await self.core.etat(REEL) == "on"
+        return maitre, reel
 
-    async def _ecrire(self, restants: list[dict], lignes: list[dict], maintenant: datetime) -> dict:
-        termines = ajoutes = 0
-        for i in restants:
-            if i.get("uid"):
-                termines += await self._todo("update_item", {"item": i["uid"], "status": "completed"})
-        for l in lignes:
-            ajoutes += await self._todo("add_item", {
-                "item": f"[{l['tag']}] {l['fait']}",
-                "description": f"imp={l['imp']};dt={l['dt'] or maintenant.strftime('%Y-%m-%d')};n={l['n']};src=consolide"})
-        return {"termines": termines, "ajoutes": ajoutes}
+    async def _appliquer(self, plan: dict) -> dict:
+        """Écrit le plan dans HA, dans un ordre qui évite toute perte :
+        1. ajouter les nouveaux faits (en cas d'échec : on retire ceux déjà ajoutés = compensation,
+           et on s'arrête avant de toucher aux anciens) ;
+        2. passer les anciens faits en « terminé » et appliquer le tri (jamais d'effacement ici) ;
+        3. retirer les terminés déjà copiés dans la base du Core.
+        """
+        ecrit = {"ajoutes": 0, "termines": 0, "tri": 0, "retires_termines": 0, "erreurs": []}
+        ajoutes: list[str] = []
+        for l in plan["lignes"]:
+            texte = f"[{l['tag']}] {l['fait']}"
+            if await self._todo("add_item", {"item": texte, "description": l["description"]}):
+                ajoutes.append(texte)
+                continue
+            ecrit["erreurs"].append(f"ajout impossible : {texte[:60]}")
+            for t in ajoutes:  # compensation : la liste revient à son état d'avant
+                await self._todo("remove_item", {"item": t})
+            ecrit.update(ajoutes=0, compense=len(ajoutes))
+            return ecrit
+        ecrit["ajoutes"] = len(ajoutes)
+        for uid in plan["terminer"]:
+            if await self._todo("update_item", {"item": uid, "status": "completed"}):
+                ecrit["termines"] += 1
+            else:
+                ecrit["erreurs"].append(f"terminer {uid}")
+        for p in plan["promouvoir"]:
+            if await self._todo("update_item", {"item": p["uid"], "rename": p["s"], "description": p["d"]}):
+                ecrit["tri"] += 1
+            else:
+                ecrit["erreurs"].append(f"promouvoir {p['uid']}")
+        for k in range(0, len(plan["retirer"]), 50):
+            if await self._todo("remove_item", {"item": plan["retirer"][k:k + 50]}):
+                ecrit["retires_termines"] += len(plan["retirer"][k:k + 50])
+            else:
+                ecrit["erreurs"].append("retrait des terminés")
+        return ecrit
 
     async def consolider(self, forcer: bool = False) -> dict:
-        """Essai par défaut ; réel si input_boolean.adria_core_consolidation_reelle est ON."""
-        if not forcer and await self.core.etat("input_boolean.adria_core_consolidation") != "on":
-            return {"ok": False, "raison": "adria_core_consolidation OFF"}
-        reel = await self.core.etat("input_boolean.adria_core_consolidation_reelle") == "on"
+        """Essai par défaut ; réel si input_boolean.adria_core_consolidation_reelle est ON.
+
+        v0.21.2 (fiche R2) :
+        - `forcer` ne contourne PLUS l'interrupteur maître (il est seulement noté dans le résultat) ;
+        - tout est PRÉPARÉ sans rien écrire dans HA (tri, IA, garde-fou, interdits) ;
+        - les deux interrupteurs sont relus juste avant l'écriture ;
+        - l'écriture suit _appliquer (ajouts d'abord, compensation en cas d'échec).
+        """
         maintenant = datetime.now()
+        maitre, reel = await self._interrupteurs()
+        if not maitre:
+            res = {"ok": False, "essai": True, "quand": maintenant.isoformat(timespec="seconds"),
+                   "raison": f"{MAITRE.split('.')[1]} OFF ou illisible", "forcer_ignore": bool(forcer)}
+            LOG.warning("Consolidation bloquée : %s", res["raison"])
+            return res
         items = await self._items()
-        ecrit: dict = {}
         if reel:
-            # Règle de Mael : rien ne quitte HA sans copie dans le Core -> copie d'abord.
+            # Règle de Mael : rien ne quitte HA sans copie dans le Core -> copie d'abord (base du Core,
+            # jamais effacée ; ce n'est pas une écriture dans HA).
             self.core.memoire.ajouter("adria_memoire", items, maintenant)
-            ecrit["retires_termines"] = await self._retirer_termines()
         tri = trier(items, maintenant)
-        if reel:
-            ecrit["tri"] = await self._ecrire_tri(tri)
         restants = appliquer_tri(items, tri)
         res = {"essai": not reel, "quand": maintenant.isoformat(timespec="seconds"), "avant": len(items),
                "tri": {"res_vieux": len(tri["res_vieux"]), "obs_oubliees": len(tri["obs_vieilles"]),
                        "promues_regle": len(tri["promouvoir"])}}
+        if forcer:
+            res["forcer_ignore"] = True
+        plan = {"lignes": [], "terminer": tri["obs_vieilles"] + tri["res_vieux"],
+                "promouvoir": tri["promouvoir"], "retirer": []}
         if rien_de_nouveau(restants, await self._courtes_changees(maintenant)):
             res.update(ok=True, raison="rien de nouveau (0 token)")
         else:
@@ -274,13 +311,32 @@ class AgentConsolidation:
                 res["raison"] = str(rep.get("erreur") or "IA sans réponse")[:120]
             elif annule:
                 res["raison"] = f"garde-fou : {len(lignes)} faits pour {len(restants)}"
-            if reel and res["ok"]:
-                if res["interdits"]:  # sécurité en plus du script HA : on n'écrit pas
-                    res.update(ok=False, raison="faits interdits recréés : rien écrit")
-                else:
-                    ecrit.update(await self._ecrire(restants, lignes, maintenant))
-        if reel:
-            res["ecrit"] = ecrit
+            elif res["interdits"]:  # vérifié AVANT toute écriture, en essai comme en réel
+                res.update(ok=False, raison="faits interdits recréés : rien écrit")
+            plan["lignes"] = [{**l, "description": f"imp={l['imp']};dt={l['dt'] or maintenant.strftime('%Y-%m-%d')};"
+                                                   f"n={l['n']};src=consolide"} for l in lignes]
+            plan["terminer"] = plan["terminer"] + [i["uid"] for i in restants if i.get("uid")]
+        if reel and res["ok"]:
+            try:
+                plan["retirer"] = await self._termines_copies()
+            except Exception as e:
+                res.update(ok=False, raison=f"lecture des terminés impossible : {str(e)[:80]}")
+        if reel and res["ok"]:
+            # Dernière vérification juste avant d'écrire : les deux interrupteurs doivent être ON.
+            maitre, reel_encore = await self._interrupteurs()
+            if not (maitre and reel_encore):
+                res.update(ok=False, raison="interrupteur coupé pendant la préparation : rien écrit")
+            else:
+                LOG.info("Consolidation réelle : %s ajouts, %s terminés, %s retraits", len(plan["lignes"]),
+                         len(plan["terminer"]), len(plan["retirer"]))
+                ecrit = await self._appliquer(plan)
+                res["ecrit"] = ecrit
+                if ecrit.get("compense") is not None:
+                    res.update(ok=False, raison="écriture interrompue : ajouts annulés (compensation)")
+                elif ecrit["erreurs"]:
+                    res.update(ok=False, raison="écriture partielle : " + "; ".join(ecrit["erreurs"])[:120])
+        elif reel:
+            res["ecrit"] = {}  # rien écrit dans HA
         self.dernier = res
         try:
             self.core.memoire.meta("derniere_consolidation", json.dumps(res, ensure_ascii=False))

@@ -38,7 +38,8 @@ from notifs import AgentNotifs
 from consolidation import AgentConsolidation
 from evolution import Evolution
 import evolution as EV
-from mcp import ServeurMCP
+from mcp import ServeurMCP, lire_jetons
+import confidentialite as CF
 import procedures as PR
 from procedures import Procedures
 import sens as SE
@@ -60,7 +61,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.21.1"
+VERSION = "0.21.2"
 
 
 def lire_options() -> dict:
@@ -100,6 +101,11 @@ class Core:
         self.sens = Sens(self.memoire, self.ollama_url, opts.get("sens_modele") or SE.MODELE,
                          float(opts.get("sens_seuil") or SE.SEUIL))  # lot S1
         self.mcp_jeton: str = str(opts.get("mcp_jeton") or "")
+        # v0.21.2 (R1) : jetons MCP avec profil, politique de confidentialité côté serveur
+        self.mcp_jetons = lire_jetons(self.mcp_jeton, opts.get("mcp_jetons") or [],
+                                      opts.get("mcp_jeton_profil"))
+        self.politique = CF.Politique(self.memoire, opts.get("memoire_sources_enfant") or None,
+                                      opts.get("memoire_sources_inconnu") or None)
         self.mcp: ServeurMCP | None = None
         self.deja_connecte = False
         self.routeur = Routeur(self)
@@ -536,14 +542,21 @@ class Core:
         except Exception:
             LOG.exception("Propositions d'habitudes")
 
-    def _choisir(self, liste: str, source: str, items: list[dict], maintenant: datetime):
-        self.memoire.ajouter(source, items)  # recopie juste avant : rien ne se perd
+    def _choisir(self, liste: str, source: str, items: list[dict], maintenant: datetime, essai: bool = False):
+        """Lignes à retirer (avec copie dans le Core) et lignes choisies.
+        v0.21.2 (R5) : en essai, AUCUNE écriture SQLite — on prévoit seulement que la recopie de
+        l'exécution réelle couvrirait toutes les lignes ayant un uid."""
         choix = a_purger(liste, items, maintenant)
+        if essai:
+            return [i for i in choix if i.get("uid")], choix
+        self.memoire.ajouter(source, items)  # recopie juste avant : rien ne se perd
         return [i for i in choix if i.get("uid") and self.memoire.a_la_copie(source, i)], choix
 
     async def purger(self, data: dict | None = None) -> dict:
         """Lot M2b-1. Retire des listes HA seulement les lignes dont le Core a la copie.
-        essai=True : compte sans rien retirer."""
+        essai=True : SIMULATION STRICTE (v0.21.2, R5) — aucune écriture SQLite, aucune suppression,
+        aucune mise à jour d'état HA (sensor.adria_core) ni de la dernière purge ; seul le rapport
+        est publié par l'événement adria_core_purge_resultat."""
         essai = str((data or {}).get("essai")).lower() == "true"
         maintenant = datetime.now()
         # Garde-fou centralisé : aucune suppression sans interrupteur ON.
@@ -552,6 +565,8 @@ class Core:
         res: dict = {"quand": maintenant.isoformat(timespec="seconds"), "essai": essai,
                      "bloquee": bloquee,
                      "retirees": {}, "gardees_sans_copie": {}, "erreurs": [], "durees": {}}
+        if essai:
+            res.update(a_copier={}, operations=[])
         if bloquee:
             LOG.warning("Purge bloquée : input_boolean.adria_core_purge n'est pas ON")
         for liste in ([] if bloquee else LISTES_PURGE):
@@ -561,9 +576,14 @@ class Core:
                 rep = await self.appel("POST", "/services/todo/get_items?return_response",
                                        {"entity_id": liste})
                 items = rep.get("service_response", {}).get(liste, {}).get("items", [])
-                ok, choix = self._choisir(liste, source, items, maintenant)
+                ok, choix = self._choisir(liste, source, items, maintenant, essai)
                 res["durees"][source] = round(time.monotonic() - t0, 1)
                 sans = len(choix) - len(ok)
+                if essai and ok:
+                    manquantes = sum(1 for i in ok if not self.memoire.a_la_copie(source, i))
+                    if manquantes:
+                        res["a_copier"][source] = manquantes
+                    res["operations"].append(f"{liste} : copier {manquantes}, retirer {len(ok)}")
                 if ok and not essai:
                     for k in range(0, len(ok), 50):
                         await self.appel("POST", "/services/todo/remove_item", {
@@ -579,12 +599,14 @@ class Core:
             self.evolution.suivre("purge", "mémoire", not res["erreurs"],
                                   "Purge des listes HA avec erreurs : " + "; ".join(res["erreurs"])[:200],
                                   "purge de nouveau sans erreur")
-        self.derniere_purge = res
+        if not essai:  # la simulation ne change aucun état persistant
+            self.derniere_purge = res
         try:
             await self.appel("POST", "/events/adria_core_purge_resultat", res)
         except Exception:
             pass
-        await self.publier_etat()
+        if not essai:
+            await self.publier_etat()
         return res
 
     def importer_archive(self) -> int:
@@ -652,14 +674,18 @@ class Core:
         except Exception as e:
             LOG.warning("Etat non publié : %s", e)
 
-    async def chercher_tout(self, question: str, n: int = 5, exclure: list[str] | None = None) -> list[dict]:
-        """Lot S1 : mots d'abord (P1) ; le sens complète s'il manque des réponses (interrupteur ON)."""
+    async def chercher_tout(self, question: str, n: int = 5, exclure: list[str] | None = None,
+                            profil: str = CF.ADULTE) -> list[dict]:
+        """Lot S1 : mots d'abord (P1) ; le sens complète s'il manque des réponses (interrupteur ON).
+        v0.21.2 (R1) : la politique du profil s'ajoute TOUJOURS aux exclusions du client, et filtre
+        encore le résultat (deuxième barrière). Profil invalide -> CF.AccesRefuse."""
         n = max(1, min(int(n), 20))
-        lignes = self.memoire.chercher(question, n, exclure or [])
+        exclure = self.politique.exclusions(profil, exclure)
+        lignes = self.politique.filtrer(profil, self.memoire.chercher(question, n, exclure))
         if len(lignes) >= n or len(question.strip()) < 4 or await self.etat(SE.INTERRUPTEUR) != "on":
             return lignes
         try:
-            sens = await self.sens.chercher(question, n, exclure or [], delai=8)
+            sens = self.politique.filtrer(profil, await self.sens.chercher(question, n, exclure, delai=8))
             self.evolution.corriger("sens_recherche", "la recherche par le sens répond de nouveau")
         except Exception as e:
             LOG.warning("Recherche par le sens : %s", str(e)[:150])
@@ -671,10 +697,12 @@ class Core:
     async def repondre(self, data: dict) -> None:
         req_id = data.get("req_id", "")
         try:
+            exclues = data.get("exclure_sources") or []
             lignes = await self.chercher_tout(
                 data.get("question", ""),
                 int(data.get("n", 5)),
-                data.get("exclure_sources") or [],
+                [exclues] if isinstance(exclues, str) else list(exclues),
+                profil=CF.profil_evenement(data),
             )
             for l in lignes:
                 l["origine"] = libelle(l["source"])
@@ -950,9 +978,9 @@ class Core:
             except Exception:
                 LOG.exception("Page formulaires")
             self.sens.session = session
-            if self.mcp_jeton:
+            if self.mcp_jetons:
                 try:
-                    self.mcp = ServeurMCP(self, self.mcp_jeton)
+                    self.mcp = ServeurMCP(self, self.mcp_jetons)
                     await self.mcp.demarrer()
                 except Exception:
                     LOG.exception("Bus MCP")
