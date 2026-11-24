@@ -31,8 +31,10 @@ class FauxCore:
             return {"service_response": {LISTE: {"items": [{"uid": "u1", "summary": "x"}]}}}
         return {}
 
-    def _choisir(self, liste, source, items, maintenant):
+    def _choisir(self, liste, source, items, maintenant, essai=False):
         return items, items  # tout est purgeable et déjà copié
+
+    memoire = type("M", (), {"a_la_copie": lambda s, source, i: True})()
 
     async def publier_etat(self):
         pass

@@ -20,6 +20,7 @@ import re
 import uuid
 from datetime import date, datetime, timedelta
 
+import confidentialite as CF
 from competences import choisir_entites
 
 LOG = logging.getLogger("adria_core.general")
@@ -29,8 +30,7 @@ MAX_JOUR = 30
 SECOURS_ATTENTE = 12
 ADULTES = {"mael", "vanessa"}
 FOYER = {"mael", "vanessa", "ryan", "iwan", "aelia"}
-SOURCES_ENFANT = ("adria_souvenirs", "adria_jarvis_episodes", "adria_journal_interieur", "souvenirs_famille",
-                  "menus")
+# v0.21.2 : une seule politique, dans confidentialite.py (profil « enfant »)
 TYPES = ("courses", "rappel", "agenda", "memo")
 PROMPT = (
     "Tu es ADRIA, l intelligence de la Maison Kerherve (Saint-Brieuc) : a la fois majordome, comptable du "
@@ -149,8 +149,9 @@ class AgentGeneral:
         adulte = p in ADULTES
         blocs = []
         lignes = self.core.memoire.chercher(question, 8)
-        if not adulte:
-            lignes = [l for l in lignes if l["source"] in SOURCES_ENFANT or l["source"].startswith("archive/souvenir")]
+        if not adulte:  # politique centrale (confidentialite.py) ; repli sûr si le core n'en a pas
+            pol = getattr(self.core, "politique", None) or CF.Politique(self.core.memoire)
+            lignes = pol.filtrer(CF.ENFANT if p in FOYER else CF.INCONNU, lignes)
         if lignes:
             blocs.append("MEMOIRE : " + " ; ".join(f"[{l['date'] or '?'}] {l['texte'][:200]}" for l in lignes))
         try:

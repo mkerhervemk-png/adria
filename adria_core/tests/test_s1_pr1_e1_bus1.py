@@ -176,12 +176,15 @@ class FauxCore:
     version = "0.17.0"
 
     def __init__(self, m):
+        import confidentialite as CF
         self.memoire = m
         self.procedures = Procedures(m)
         self.evolution = Evolution(m)
+        self.politique = CF.Politique(m)
 
-    async def chercher_tout(self, q, n, ex):
-        return self.memoire.chercher(q, n, ex)
+    async def chercher_tout(self, q, n, ex=None, profil="adulte"):
+        ex = self.politique.exclusions(profil, ex)
+        return self.politique.filtrer(profil, self.memoire.chercher(q, n, ex))
 
     def resume_etat(self):
         return {"version": self.version}
