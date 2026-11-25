@@ -18,6 +18,7 @@ commandes de sécurité, preuves citées, temps de réponse.
 """
 
 import json
+import logging
 import time
 from datetime import date, datetime
 
@@ -167,61 +168,194 @@ async def executer(brain, politique, version: str, moteur: str = "", categorie: 
             "echecs": [d for d in details if not d["ok"]], "details": details}
 
 
-def _compteur_valide(c) -> bool:
-    if not isinstance(c, dict) or set(c) != {"date", "n"}:
+# ------------------------------------------------------------------ quota (v0.22.1, révision 3)
+# Deux clés de `meta`, écrites ENSEMBLE dans la même transaction que chaque réservation :
+#   banc_initialise = {"v": 1, "cree": "AAAA-MM-JJTHH:MM:SS", "origine": "neuve" | "migration" | "recuperation"}
+#   banc_compte     = {"date": "AAAA-MM-JJ", "n": entier >= 0, "v": 2}
+# + une ligne « banc_reservation » dans le journal chaîné du Guardian (témoin indépendant de l'usage).
+# Ancien format accepté UNE fois, pour migrer : banc_compte = {"date", "n"} sans marqueur (premières v0.22.1).
+COMPTEUR, MARQUEUR = "banc_compte", "banc_initialise"
+ORIGINES = ("neuve", "migration", "recuperation")
+CONFIRMATION = "RECUPERATION MANUELLE DU QUOTA DU BANC"
+LOG = logging.getLogger("adria_core.banc")
+
+
+def _date_valide(v) -> date | None:
+    try:
+        return date.fromisoformat(v) if isinstance(v, str) and date.fromisoformat(v).isoformat() == v else None
+    except ValueError:
+        return None
+
+
+def _entier_positif(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def _compteur(c, ancien: bool) -> date | None:
+    """Date du compteur s'il est valide dans le format attendu (ancien = {date, n} ; nouveau = + v: 2)."""
+    cles = {"date", "n"} if ancien else {"date", "n", "v"}
+    if not isinstance(c, dict) or set(c) != cles or not _entier_positif(c["n"]):
+        return None
+    if not ancien and (c["v"] != 2 or isinstance(c["v"], bool)):
+        return None
+    return _date_valide(c["date"])
+
+
+def _marqueur_valide(m) -> bool:
+    if not isinstance(m, dict) or set(m) != {"v", "cree", "origine"} or m["v"] != 1 or isinstance(m["v"], bool):
         return False
-    if not isinstance(c["n"], int) or isinstance(c["n"], bool) or c["n"] < 0:
+    if m["origine"] not in ORIGINES or not isinstance(m["cree"], str):
         return False
     try:
-        return isinstance(c["date"], str) and date.fromisoformat(c["date"]).isoformat() == c["date"]
+        datetime.fromisoformat(m["cree"])
+        return True
     except ValueError:
         return False
 
 
-def reserver(memoire, maintenant: datetime | None = None, max_jour: int | None = None) -> bool:
-    """Réserve un passage du jour (v0.22.1, FERMÉ PAR DÉFAUT). Renvoie False — rien n'est lancé — si :
-    le plafond du jour est atteint ; le compteur est illisible, corrompu, négatif ou d'un type inattendu ;
-    sa date est dans le futur ; une lecture ou une écriture SQLite échoue ; une transaction est déjà ouverte.
-    Le compteur ne repart à zéro que si sa date (valide) est strictement antérieure à aujourd'hui.
-    Lecture et écriture dans UNE transaction BEGIN IMMEDIATE : deux réservations simultanées (même depuis
-    deux connexions) ne peuvent pas dépasser le plafond."""
+def _lire(db, cle: str):
+    """(présent, valeur JSON). Une valeur illisible lève ValueError (-> refus)."""
+    r = db.execute("SELECT valeur FROM meta WHERE cle = ?", (cle,)).fetchone()
+    if r is None:
+        return False, None
+    try:
+        return True, json.loads(r[0])
+    except (TypeError, ValueError):
+        raise ValueError(f"D : {cle} illisible (JSON invalide)") from None
+
+
+def _preuves_usage(db) -> list[str]:
+    """Traces d'un usage passé du banc, indépendantes du compteur et du marqueur. Un journal du Guardian
+    dont la chaîne est rompue compte comme une trace (on ne peut plus prouver que la base est vierge)."""
+    preuves = []
+    if db.execute("SELECT 1 FROM meta WHERE cle = 'banc_historique'").fetchone():
+        preuves.append("historique du banc (v0.22.0+)")
+    table = db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'guardian_journal'").fetchone()
+    if table:
+        if db.execute("SELECT 1 FROM guardian_journal WHERE outil IN ('banc_reservation', 'banc_recuperation')"
+                      " LIMIT 1").fetchone():
+            preuves.append("réservations du banc dans le journal du Guardian")
+        prec = "0" * 64
+        for r in db.execute("SELECT quand, mission, profil, outil, classe, autorise, raison, prec, hash"
+                            " FROM guardian_journal ORDER BY id"):
+            contenu = {"quand": r[0], "mission": r[1], "profil": r[2], "outil": r[3], "classe": r[4],
+                       "autorise": r[5], "raison": r[6]}
+            if r[7] != prec or r[8] != GD.empreinte(prec, contenu):
+                preuves.append("journal du Guardian rompu")
+                break
+            prec = r[8]
+    return preuves
+
+
+def _ecrire(db, jour: date, n: int, marqueur: dict | None, quand: datetime, outil: str, raison: str) -> None:
+    db.execute(GD.TABLE_JOURNAL)
+    db.execute("INSERT OR REPLACE INTO meta (cle, valeur) VALUES (?, ?)",
+               (COMPTEUR, json.dumps({"date": jour.isoformat(), "n": n, "v": 2})))
+    if marqueur is not None:
+        db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (MARQUEUR, json.dumps(marqueur)))
+    GD.ajouter_ligne(db, {"quand": quand.isoformat(timespec="seconds"), "mission": "banc", "profil": "",
+                          "outil": outil, "classe": "banc", "autorise": 1, "raison": raison[:200]})
+
+
+def reserver_detail(memoire, maintenant: datetime | None = None, max_jour: int | None = None) -> tuple[bool, str]:
+    """Réserve un passage du banc. FERMÉ PAR DÉFAUT. Renvoie (accordé, motif).
+
+    A. base vierge (ni compteur, ni marqueur, aucune trace d'usage) : marqueur + compteur créés ensemble ;
+    B. ancien compteur {date, n} valide sans marqueur (premières v0.22.1) : migration SANS remise à zéro ;
+    C. marqueur sans compteur : refus (pas de recréation) ;
+    D. marqueur ou compteur invalide, ou incohérents entre eux (ex. compteur v2 sans marqueur = marqueur
+       supprimé) : refus, aucune réparation ;
+    E. ni compteur ni marqueur mais une trace d'usage (historique du banc, journal) : refus ; seule
+       `recuperer()` (intervention manuelle explicite) débloque.
+    Puis : date du compteur = aujourd'hui -> n ; antérieure (valide) -> 0 ; future -> refus ; n >= plafond ->
+    refus. Tout (compteur, marqueur, ligne du journal) est écrit dans UNE transaction BEGIN IMMEDIATE :
+    une interruption n'en laisse rien. Toute erreur SQLite ou transaction déjà ouverte -> refus."""
     limite = MAX_JOUR if max_jour is None else max_jour
-    jour = (maintenant or datetime.now()).date()
+    quand = maintenant or datetime.now()
+    jour = quand.date()
     db = memoire.db
     try:
         if db.in_transaction:
-            return False
+            return False, "transaction déjà ouverte"
         db.execute("BEGIN IMMEDIATE")
-    except Exception:
-        return False
+    except Exception as e:
+        return False, f"verrou impossible ({type(e).__name__})"
     try:
-        r = db.execute("SELECT valeur FROM meta WHERE cle = 'banc_compte'").fetchone()
-        if r is None:
-            n = 0  # tout premier passage : aucun compteur n'a encore existé
+        a_marqueur, marqueur = _lire(db, MARQUEUR)
+        a_compteur, compteur = _lire(db, COMPTEUR)
+        nouveau_marqueur = None
+        if a_marqueur:
+            if not _marqueur_valide(marqueur):
+                raise ValueError("D : marqueur d'initialisation invalide")
+            if not a_compteur:
+                raise ValueError("C : marqueur présent mais compteur absent")
+            d = _compteur(compteur, ancien=False)
+            if d is None:
+                raise ValueError("D : compteur invalide ou incohérent avec le marqueur")
+        elif a_compteur:
+            if _compteur(compteur, ancien=False) is not None:
+                raise ValueError("D : compteur initialisé mais marqueur absent (supprimé ?)")
+            d = _compteur(compteur, ancien=True)
+            if d is None:
+                raise ValueError("D : compteur invalide")
+            nouveau_marqueur = {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "migration"}
         else:
-            c = json.loads(r[0])
-            if not _compteur_valide(c):
-                raise ValueError("compteur du banc invalide")
-            d = date.fromisoformat(c["date"])
-            if d == jour:
-                n = c["n"]
-            elif d < jour:
-                n = 0  # changement de date établi
-            else:
-                raise ValueError("date du compteur dans le futur")
+            preuves = _preuves_usage(db)
+            if preuves:
+                raise ValueError("E : compteur et marqueur absents alors que la base a déjà servi ("
+                                 + ", ".join(preuves) + ") ; récupération manuelle requise")
+            d = jour
+            compteur = {"n": 0}
+            nouveau_marqueur = {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "neuve"}
+        if d > jour:
+            raise ValueError("date du compteur dans le futur")
+        n = compteur["n"] if d == jour else 0
         if n >= limite:
             db.rollback()
-            return False
-        db.execute("INSERT OR REPLACE INTO meta (cle, valeur) VALUES ('banc_compte', ?)",
-                   (json.dumps({"date": jour.isoformat(), "n": n + 1}),))
+            return False, f"quota atteint ({n}/{limite} aujourd'hui)"
+        _ecrire(db, jour, n + 1, nouveau_marqueur, quand, "banc_reservation",
+                f"passage {n + 1}/{limite} du {jour.isoformat()}"
+                + (f" ({nouveau_marqueur['origine']})" if nouveau_marqueur else ""))
         db.commit()
-        return True
-    except Exception:
+        return True, f"passage {n + 1}/{limite}" + (f" ({nouveau_marqueur['origine']})" if nouveau_marqueur else "")
+    except Exception as e:
         try:
             db.rollback()
         except Exception:
             pass
-        return False
+        motif = str(e) if isinstance(e, ValueError) else f"erreur SQLite ({type(e).__name__})"
+        LOG.warning("Banc refusé : %s", motif)
+        return False, motif
+
+
+def reserver(memoire, maintenant: datetime | None = None, max_jour: int | None = None) -> bool:
+    return reserver_detail(memoire, maintenant, max_jour)[0]
+
+
+def recuperer(memoire, confirmation: str, maintenant: datetime | None = None) -> tuple[bool, str]:
+    """RÉCUPÉRATION MANUELLE (jamais appelée par le Core lui-même ; procédure dans le README).
+    Écrit un compteur « quota du jour épuisé » + un marqueur `recuperation` + une ligne du journal : le banc
+    redevient utilisable le LENDEMAIN seulement — la récupération n'accorde jamais de passage le jour même."""
+    if confirmation != CONFIRMATION:
+        return False, "confirmation absente ou incorrecte"
+    quand = maintenant or datetime.now()
+    db = memoire.db
+    try:
+        if db.in_transaction:
+            return False, "transaction déjà ouverte"
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("INSERT OR REPLACE INTO meta (cle, valeur) VALUES (?, ?)", (MARQUEUR, json.dumps(
+            {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "recuperation"})))
+        _ecrire(db, quand.date(), MAX_JOUR, None, quand, "banc_recuperation",
+                f"récupération manuelle du quota : banc bloqué jusqu'au lendemain du {quand.date().isoformat()}")
+        db.commit()
+        return True, "quota récupéré : prochain passage possible demain"
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False, f"erreur ({type(e).__name__})"
 
 
 def garder(memoire, res: dict) -> list[dict]:

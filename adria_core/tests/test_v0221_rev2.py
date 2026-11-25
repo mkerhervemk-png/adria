@@ -119,12 +119,12 @@ def test_quota_atteint_et_changement_de_date(tmp_path):
     assert compteur(m) is None
     assert BANC.reserver(m, J) and BANC.reserver(m, J)
     assert BANC.reserver(m, J) is False
-    assert json.loads(compteur(m)) == {"date": "2026-11-25", "n": 2}
-    poser(m, '{"date": "2026-11-25", "n": 7}')  # au-delà du plafond (valide) : refus
+    assert json.loads(compteur(m)) == {"date": "2026-11-25", "n": 2, "v": 2}
+    poser(m, '{"date": "2026-11-25", "n": 7, "v": 2}')  # au-delà du plafond (valide) : refus
     assert BANC.reserver(m, J) is False
     lendemain = datetime(2026, 11, 26, 0, 1)
     assert BANC.reserver(m, lendemain)  # date antérieure valide : remise à zéro autorisée
-    assert json.loads(compteur(m)) == {"date": "2026-11-26", "n": 1}
+    assert json.loads(compteur(m)) == {"date": "2026-11-26", "n": 1, "v": 2}
 
 
 def test_quota_survit_au_redemarrage(tmp_path):
@@ -199,4 +199,4 @@ def test_reservations_concurrentes(tmp_path):
     for f in fils:
         f.join()
     assert sum(resultats) == BANC.MAX_JOUR == 2
-    assert json.loads(compteur(Memoire(chemin))) == {"date": "2026-11-25", "n": 2}
+    assert json.loads(compteur(Memoire(chemin))) == {"date": "2026-11-25", "n": 2, "v": 2}

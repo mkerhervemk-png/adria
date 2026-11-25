@@ -841,9 +841,11 @@ class Core:
         """S1 : banc d'évaluation (lecture seule). Un seul passage à la fois."""
         if self.banc_en_cours:
             return
-        if not BANC.reserver(self.memoire):
-            LOG.info("Banc d'évaluation refusé : déjà %s passage(s) aujourd'hui", BANC.MAX_JOUR)
+        ok, motif = BANC.reserver_detail(self.memoire)
+        if not ok:
+            LOG.warning("Banc d'évaluation refusé : %s", motif)
             return
+        LOG.info("Banc d'évaluation : %s", motif)
         self.banc_en_cours = True
         data = data or {}
         try:

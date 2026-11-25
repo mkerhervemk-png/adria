@@ -29,7 +29,38 @@ et bus MCP en lecture seule.
   après chaque mission, chaque banc et à 23h55 ; une chaîne entièrement recalculée ne correspond plus aux
   ancres gardées dans l'historique de HA.
 
+### Quota du banc : initialisation prouvée (révision 3)
+L'absence du compteur n'est plus prise pour une première utilisation. Deux clés `meta` sont écrites **dans
+la même transaction** que chaque réservation : `banc_initialise` (marqueur, jamais réécrit) et
+`banc_compte` (`{"date", "n", "v": 2}`), plus une ligne `banc_reservation` dans le journal chaîné du
+Guardian (témoin indépendant).
+
+| État trouvé | Décision |
+|---|---|
+| A. ni marqueur, ni compteur, aucune trace (historique du banc, réservation au journal, journal rompu) | base vierge : marqueur + compteur créés, passage accordé |
+| B. ancien compteur `{"date", "n"}` valide, sans marqueur (premières v0.22.1) | migration : marqueur `migration`, consommation du jour conservée |
+| C. marqueur sans compteur | refus, rien n'est recréé |
+| D. marqueur ou compteur invalide, ou incohérents (compteur v2 sans marqueur…) | refus, aucune réparation, motif dans le journal de l'appli |
+| E. ni marqueur ni compteur, mais une trace d'usage | refus ; seule la récupération manuelle débloque |
+
+**Une base v0.22.0 qui a déjà fait tourner le banc est dans le cas E** (elle a `banc_historique` mais ni
+compteur ni marqueur) : après l'installation de la 0.22.1, le banc reste refusé jusqu'à la récupération.
+
+**Récupération manuelle** (intervention explicite de Mael, jamais faite par le Core) : depuis l'appli HA
+« Advanced SSH & Web Terminal » (mode protection désactivé), avec ADRIA Core démarré :
+
+```
+docker exec addon_0daf054b_adria_core python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc; print(banc.recuperer(Memoire('/data/adria_core.db'), 'RECUPERATION MANUELLE DU QUOTA DU BANC'))"
+```
+
+Elle écrit un compteur « quota du jour épuisé », un marqueur `recuperation` et une ligne
+`banc_recuperation` au journal : **aucun passage n'est accordé le jour même**, le banc revient le lendemain.
+
 ### Limites connues (v0.22.1)
+- Protection contre la perte ou la corruption ACCIDENTELLE du quota : quelqu'un qui peut écrire dans la base
+  du Core peut aussi y écrire un compteur valide ; le journal chaîné et son ancre dans HA permettent de le
+  constater après coup.
+- Retour arrière : la 0.22.0 ignore le compteur ; les bancs lancés en 0.22.0 ne sont pas comptés.
 - Le Guardian est un module du même processus que le Core : il protège contre une mauvaise sortie d'un
   modèle (qui ne peut pas exécuter de code), pas contre un Core compromis.
 - Le Core ne peut pas authentifier une voix : il fait confiance à `qui` envoyé par HA (bus interne, réservé

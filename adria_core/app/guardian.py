@@ -110,6 +110,28 @@ def entite_autorisee(entity_id: str) -> bool:
     return not entite_sensible(e) and e.split(".", 1)[0] not in DOMAINES_ILLISIBLES
 
 
+TABLE_JOURNAL = (
+    "CREATE TABLE IF NOT EXISTS guardian_journal ("
+    " id INTEGER PRIMARY KEY, quand TEXT NOT NULL, mission TEXT, profil TEXT, outil TEXT,"
+    " classe TEXT, autorise INTEGER NOT NULL, raison TEXT, prec TEXT NOT NULL, hash TEXT NOT NULL)")
+
+
+def empreinte(prec: str, contenu: dict) -> str:
+    return hashlib.sha256((prec + json.dumps(contenu, ensure_ascii=False, sort_keys=True)).encode()).hexdigest()
+
+
+def ajouter_ligne(db, contenu: dict) -> None:
+    """Ajoute UNE ligne chaînée au journal, SANS commit : l'appelant décide de la transaction (le banc
+    l'écrit dans la même transaction que sa réservation). Lève une exception en cas d'échec."""
+    r = db.execute("SELECT hash FROM guardian_journal ORDER BY id DESC LIMIT 1").fetchone()
+    prec = r[0] if r else "0" * 64
+    db.execute(
+        "INSERT INTO guardian_journal (quand, mission, profil, outil, classe, autorise, raison, prec, hash)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (contenu["quand"], contenu["mission"], contenu["profil"], contenu["outil"], contenu["classe"],
+         contenu["autorise"], contenu["raison"], prec, empreinte(prec, contenu)))
+
+
 def texte_sensible(texte: str) -> bool:
     return bool(MOTS_SENSIBLES.search(_plat(texte)))
 
@@ -122,10 +144,7 @@ class Guardian:
         self.etat = etat
         self.compteurs: dict[str, int] = {}
         self.refus = 0
-        self.memoire.db.execute(
-            "CREATE TABLE IF NOT EXISTS guardian_journal ("
-            " id INTEGER PRIMARY KEY, quand TEXT NOT NULL, mission TEXT, profil TEXT, outil TEXT,"
-            " classe TEXT, autorise INTEGER NOT NULL, raison TEXT, prec TEXT NOT NULL, hash TEXT NOT NULL)")
+        self.memoire.db.execute(TABLE_JOURNAL)
         self.memoire.db.commit()
 
     # ------------------------------------------------------------------ décision
@@ -198,24 +217,22 @@ class Guardian:
     # ------------------------------------------------------------------ journal chaîné
     @staticmethod
     def _empreinte(prec: str, contenu: dict) -> str:
-        return hashlib.sha256((prec + json.dumps(contenu, ensure_ascii=False, sort_keys=True)).encode()).hexdigest()
+        return empreinte(prec, contenu)
 
     def noter(self, mission, profil, outil, d: Decision, quand: datetime | None = None) -> bool:
         """Ajoute la décision au journal chaîné. Renvoie False si l'écriture a échoué."""
         try:
-            r = self.memoire.db.execute("SELECT hash FROM guardian_journal ORDER BY id DESC LIMIT 1").fetchone()
-            prec = r[0] if r else "0" * 64
             contenu = {"quand": (quand or datetime.now()).isoformat(timespec="seconds"), "mission": str(mission or ""),
                        "profil": str(profil or ""), "outil": str(outil or ""), "classe": d.classe,
                        "autorise": int(d.autorise), "raison": d.raison[:200]}
-            self.memoire.db.execute(
-                "INSERT INTO guardian_journal (quand, mission, profil, outil, classe, autorise, raison, prec, hash)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (contenu["quand"], contenu["mission"], contenu["profil"], contenu["outil"], contenu["classe"],
-                 contenu["autorise"], contenu["raison"], prec, self._empreinte(prec, contenu)))
+            ajouter_ligne(self.memoire.db, contenu)
             self.memoire.db.commit()
             return True
         except Exception:
+            try:  # ne jamais laisser une transaction ouverte derrière un échec
+                self.memoire.db.rollback()
+            except Exception:
+                pass
             return False  # l'appelant transforme une autorisation non tracée en refus
 
     def verifier_chaine(self) -> dict:
