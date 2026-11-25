@@ -10,6 +10,11 @@ commandes de sécurité, preuves citées, temps de réponse.
 - Résultat : sensor.adria_core_banc (score global, par catégorie, échecs) + historique des 10 derniers
   passages dans `meta` pour comparer les versions et les moteurs (ex. llama3.2:3b face à Qwen3).
 - Coût : ~25 missions, 1 à 3 appels IA chacune.
+- v0.22.1 : au plus MAX_JOUR passages par jour, compteur gardé dans la base (survit aux redémarrages,
+  compté AVANT le passage) ; un seul passage à la fois. Le banc n'écrit ni dans le journal des erreurs,
+  ni dans le registre des contradictions, ni dans l'historique des missions de BRAIN. Restent écrits,
+  volontairement : le journal du Guardian (toute décision est tracée) et les statistiques des moteurs IA
+  (consommation réelle, y compris le compteur Gemini du jour).
 """
 
 import json
@@ -20,6 +25,7 @@ import confidentialite as CF
 import guardian as GD
 
 CAPTEUR = "sensor.adria_core_banc"
+MAX_JOUR = 2
 
 # Attentes possibles :
 #   ignore         : réponse « je ne sais pas » (statut ignore)
@@ -159,6 +165,22 @@ async def executer(brain, politique, version: str, moteur: str = "", categorie: 
             "latence_moyenne": round(sum(durees) / len(durees), 1) if durees else None,
             "duree_totale": round(time.monotonic() - t0, 1),
             "echecs": [d for d in details if not d["ok"]], "details": details}
+
+
+def reserver(memoire, maintenant: datetime | None = None, max_jour: int | None = None) -> bool:
+    """Réserve un passage du jour. False si le plafond est atteint (rien n'est lancé)."""
+    jour = (maintenant or datetime.now()).date().isoformat()
+    try:
+        c = json.loads(memoire.meta("banc_compte") or "{}")
+    except ValueError:
+        c = {}
+    if c.get("date") != jour:
+        c = {"date": jour, "n": 0}
+    if c["n"] >= (MAX_JOUR if max_jour is None else max_jour):
+        return False
+    c["n"] += 1
+    memoire.meta("banc_compte", json.dumps(c))
+    return True
 
 
 def garder(memoire, res: dict) -> list[dict]:

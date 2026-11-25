@@ -335,7 +335,8 @@ def test_brain_quota_et_suivi(tmp_path, monkeypatch):
     assert r["refus"] == "quota"
     assert run(c.brain.repondre({"question": "gâteau", "qui": "Mael"}, banc=True))["ok"]  # banc hors quota
     e = c.brain.etat()
-    assert e["attributes"]["journal_integre"] and len(json.loads(c.memoire.meta("brain_missions"))) == 3
+    # v0.22.1 : la mission du banc n'entre pas dans l'historique des vraies missions
+    assert e["attributes"]["journal_integre"] and len(json.loads(c.memoire.meta("brain_missions"))) == 2
 
 
 def test_brain_moteur_force_pour_le_banc(tmp_path):
@@ -387,8 +388,8 @@ def test_banc_executer_et_historique(tmp_path):
 
 def test_version_coherente():
     cfg = open(os.path.join(APP, "..", "config.yaml"), encoding="utf-8").read()
-    assert 'version: "0.22.0"' in cfg and main.VERSION == "0.22.0"
-    assert open(os.path.join(APP, "..", "README.md"), encoding="utf-8").readline().find("v0.22.0") >= 0
+    assert f'version: "{main.VERSION}"' in cfg and main.VERSION.startswith("0.22.")
+    assert open(os.path.join(APP, "..", "README.md"), encoding="utf-8").readline().find(f"v{main.VERSION}") >= 0
 
 
 def test_brain_pas_de_reponse_inventee_a_partir_d_une_reponse_ia(tmp_path):

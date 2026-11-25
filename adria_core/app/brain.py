@@ -79,16 +79,38 @@ PROMPT = (
 )
 
 
+RANG = {CF.INCONNU: 0, CF.ENFANT: 1, CF.ADULTE: 2}
+
+
 def profil_de(data: dict) -> str:
-    """Profil de la demande. `profil` explicite et valide sinon déduit de `qui` ; personne -> inconnu."""
-    if data.get("profil") not in (None, ""):
-        return CF.normaliser_profil(data.get("profil")) or CF.INCONNU
+    """Profil de la demande (v0.22.1). Il est d'abord déduit de `qui` (personne reconnue par HA ; absent ->
+    inconnu). Un champ `profil` fourni par l'appelant ne peut que RESTREINDRE, jamais élargir : on garde le
+    plus strict des deux ; un `profil` invalide donne « inconnu »."""
     p = str(data.get("qui") or "").split(" ")[0].lower().replace("ë", "e").replace("é", "e")
-    if p in ADULTES:
-        return CF.ADULTE
-    if p in ENFANTS:
-        return CF.ENFANT
-    return CF.INCONNU
+    deduit = CF.ADULTE if p in ADULTES else CF.ENFANT if p in ENFANTS else CF.INCONNU
+    if data.get("profil") in (None, ""):
+        return deduit
+    fourni = CF.normaliser_profil(data.get("profil")) or CF.INCONNU
+    return fourni if RANG[fourni] < RANG[deduit] else deduit
+
+
+_MOTS_VIDES = {"avec", "dans", "pour", "plus", "tout", "cette", "sont", "etre", "avoir", "fait", "faire",
+               "est", "les", "des", "une", "que", "qui", "pas", "mais", "aussi", "comme", "tres", "bien",
+               "peut", "rien", "trouve", "trouvee", "actuellement", "maintenant", "selon", "dernier",
+               "derniere", "aucune", "aucun", "ainsi", "alors"}
+
+
+def _termes(t: str) -> set[str]:
+    plat = CF._plat(t)
+    mots = {m[:6] for m in re.findall(r"[a-z]{4,}", plat) if m not in _MOTS_VIDES}
+    return mots | set(re.findall(r"\d+", plat))
+
+
+def pertinentes(texte: str, preuves: list[dict]) -> list[dict]:
+    """v0.22.1 : ne garde que les preuves qui partagent au moins un terme significatif (mot de 4 lettres et
+    plus, ou nombre) avec la réponse. Une preuve citée mais sans rapport ne justifie rien."""
+    t = _termes(texte)
+    return [p for p in preuves if t & _termes(str(p.get("texte") or ""))]
 
 
 def est_commande_sensible(question: str) -> bool:
@@ -127,11 +149,12 @@ class Brain:
         return True
 
     # ------------------------------------------------------------------ outils (lecture seule)
-    async def outil(self, nom: str, args: dict, profil: str, question: str) -> object:
+    async def outil(self, nom: str, args: dict, profil: str, question: str, banc: bool = False) -> object:
         c = self.core
         if nom == "memoire_chercher":
             q = str(args.get("question") or question)[:300]
-            return await c.chercher_tout(q, 6, profil=profil)
+            # le banc ne doit laisser aucune trace dans le journal des erreurs du Core
+            return await c.chercher_tout(q, 6, profil=profil, journaliser=not banc)
         if nom == "memoire_periode":
             from store import mots_cles
             pol = c.politique
@@ -172,6 +195,8 @@ class Brain:
     async def _etat_entite(self, entite: str) -> list[dict]:
         c = self.core
         if re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entite):
+            if not GD.entite_autorisee(entite):  # 2e barrière (le Guardian a déjà refusé)
+                return []
             e = await c.appel("GET", f"/states/{entite}")
             return [{"entity_id": entite, "nom": (e.get("attributes") or {}).get("friendly_name"),
                      "etat": e.get("state"), "depuis": str(e.get("last_changed"))[:16]}]
@@ -180,7 +205,7 @@ class Brain:
         par_id = {e["entity_id"]: e for e in etats}
         res = []
         for eid, nom in choisir_entites(entite, etats, 5):
-            if eid in par_id and not GD.entite_sensible(eid) and eid.split(".")[0] not in GD.DOMAINES_ILLISIBLES:
+            if eid in par_id and GD.entite_autorisee(eid):
                 res.append({"entity_id": eid, "nom": nom, "etat": par_id[eid].get("state"),
                             "depuis": str(par_id[eid].get("last_changed"))[:16]})
         return res
@@ -188,6 +213,8 @@ class Brain:
     async def _historique(self, entite: str, heures) -> list[str]:
         if not re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entite):
             return ["entity_id exact demandé (ex. light.salon)"]
+        if not GD.entite_autorisee(entite):  # 2e barrière (le Guardian a déjà refusé)
+            return []
         h = max(1, min(int(heures or 24), 48))
         debut = (datetime.now().astimezone() - timedelta(hours=h)).isoformat(timespec="seconds")
         rep = await self.core.appel(
@@ -247,7 +274,8 @@ class Brain:
         def fin(texte: str, ok: bool = True, **k) -> dict:
             res.update(ok=ok, texte=texte, duree=round(time.monotonic() - t0, 1), **k)
             self.guardian.fin_mission(mission)
-            self._garder(res, q, m)
+            if not banc:  # le banc ne remplace pas l'historique des vraies missions
+                self._garder(res, q, m)
             return res
 
         if not banc and await self.core.etat(INTERRUPTEUR) != "on":
@@ -269,7 +297,8 @@ class Brain:
         if not d.autorise:
             return fin("Je ne peux pas répondre : " + d.raison + ".", ok=False, refus=d.raison)
         try:
-            self._observer(obs, "memoire_chercher", await self.outil("memoire_chercher", {"question": q}, profil, q), numero)
+            self._observer(obs, "memoire_chercher",
+                           await self.outil("memoire_chercher", {"question": q}, profil, q, banc), numero)
             res["outils"].append("memoire_chercher")
         except CF.AccesRefuse as e:
             return fin(f"Je ne peux pas répondre : {e}.", ok=False, refus=str(e))
@@ -306,7 +335,7 @@ class Brain:
                     obs.append({"ref": None, "outil": nom, "texte": f"refusé par le Guardian : {d.raison}", "confiance": 0})
                     continue
                 try:
-                    self._observer(obs, nom, await self.outil(nom, args, profil, q), numero)
+                    self._observer(obs, nom, await self.outil(nom, args, profil, q, banc), numero)
                     res["outils"].append(nom)
                 except Exception as e:
                     obs.append({"ref": None, "outil": nom, "texte": f"erreur : {type(e).__name__}", "confiance": 0})
@@ -316,20 +345,24 @@ class Brain:
                 break
             if j.get("action") == "outil":  # dernier tour : on force une réponse au tour suivant -> pas de tour
                 break
-        return fin(**await self._verifier(finale, obs, profil, mission))
+        return fin(**await self._verifier(finale, obs, profil, mission, banc))
 
     # ------------------------------------------------------------------ vérification (sans IA)
-    async def _verifier(self, j: dict, obs: list[dict], profil: str, mission: str) -> dict:
+    async def _verifier(self, j: dict, obs: list[dict], profil: str, mission: str, banc: bool = False) -> dict:
         refs = {o["ref"]: o for o in obs if o.get("ref")}
-        preuves = [refs[r] for r in (j.get("preuves") or []) if isinstance(r, str) and r in refs]
+        citees = [refs[r] for r in (j.get("preuves") or []) if isinstance(r, str) and r in refs]
+        preuves = pertinentes(str(j.get("reponse") or ""), citees)
         memoire = [o for o in obs if o.get("ref", "") and o["ref"].startswith("M")]
         utiles = preuves or [o for o in obs if o.get("ref") and o.get("confiance", 0) > 0]
         st = FI.statut(utiles)
         k: dict = {"statut": st}
         cont = FI.contradictions([{**o, "texte": o["texte"]} for o in memoire])
         if cont:
-            self.registre.noter(cont)
+            if not banc:  # le banc n'écrit pas dans le registre des contradictions
+                self.registre.noter(cont)
             k["contradictions"] = cont[:3]
+        if len(preuves) < len(citees):
+            k["preuves_ecartees"] = [o["ref"] for o in citees if o not in preuves]
         texte = str(j.get("reponse") or "").strip()
         general = j.get("type") == "general"
         if not texte:  # pas de réponse du modèle : repli honnête, 0 IA
@@ -342,7 +375,10 @@ class Brain:
                 texte, k["statut"] = NE_SAIS_PAS, "ignore"
         elif not general:
             # réponse « maison » : jugée sur ses preuves citées (à défaut, sur ce qui a été observé)
-            st = FI.statut(preuves or utiles)
+            # preuves citées mais toutes hors sujet : la réponse n'est pas justifiée -> au mieux « suppose »
+            st = FI.statut(preuves or ([] if citees else utiles))
+            if citees and not preuves and st == "ignore" and utiles:
+                st = "suppose"
             k["statut"] = st
             if st == "ignore":
                 texte = NE_SAIS_PAS  # aucune preuve : on ne laisse pas passer
@@ -382,4 +418,5 @@ class Brain:
                 "attributes": {"friendly_name": "ADRIA Core — BRAIN", "icon": "mdi:brain",
                                "derniere_mission": self.dernier, "missions_jour": self._meta("brain_compte", {}).get("n", 0),
                                "guardian": g, "journal_integre": self.guardian.verifier_chaine()["ok"],
+                               "journal_ancre": self.guardian.ancre(),
                                "contradictions_ouvertes": len(self.registre.ouvertes(100))}}

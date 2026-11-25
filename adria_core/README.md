@@ -1,4 +1,4 @@
-# ADRIA Core (v0.22.0)
+# ADRIA Core (v0.22.1)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
@@ -6,6 +6,41 @@ Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par
 routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
 échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
 et bus MCP en lecture seule.
+
+## Nouveau en 0.22.1 — correctif de l'audit de la v0.22.0 (sécurité du Guardian et du banc)
+
+- **Arrêt d'urgence fermé par défaut** : `input_boolean.adria_core_arret_urgence` bloque tout (sauf
+  `etat_core`) dès que son état n'est pas exactement `off` (inconnu, indisponible, absent, illisible).
+- **Journal obligatoire** : une décision qui n'a pas pu être écrite dans `guardian_journal` devient un refus.
+- **Filtre central des entités sensibles** (`guardian.entite_autorisee`) appliqué à toutes les classes
+  (lecture comprise) et à tous les chemins (entity_id exact, recherche par nom, historique) : alarme,
+  serrures, caméras, sirènes, mandats, tous les `input_*.adria_*` (dont les `input_boolean.adria_core_*`)
+  et tout `*.adria_core_*`. Deuxième barrière dans BRAIN.
+- **Profils** : le profil vient de `qui` ; un `profil` fourni ne peut que restreindre (le plus strict gagne).
+- **Preuves** : une preuve citée qui ne partage aucun terme significatif avec la réponse est écartée
+  (`preuves_ecartees`) ; sans preuve pertinente, la réponse est au mieux « je n'en suis pas sûre ».
+- **Banc** : 2 passages par jour au plus (compteur dans la base, réservé avant le passage) ; plus aucune
+  écriture dans le journal des erreurs, le registre des contradictions ni l'historique des missions.
+- **Ancre du journal** : la tête de la chaîne (`journal_ancre`) est publiée dans `sensor.adria_core_brain`
+  après chaque mission, chaque banc et à 23h55 ; une chaîne entièrement recalculée ne correspond plus aux
+  ancres gardées dans l'historique de HA.
+
+### Limites connues (v0.22.1)
+- Le Guardian est un module du même processus que le Core : il protège contre une mauvaise sortie d'un
+  modèle (qui ne peut pas exécuter de code), pas contre un Core compromis.
+- Le Core ne peut pas authentifier une voix : il fait confiance à `qui` envoyé par HA (bus interne, réservé
+  à HA et à ses administrateurs).
+- La pertinence des preuves est lexicale (termes communs) : elle écarte les preuves hors sujet, elle ne
+  prouve pas qu'une preuve implique logiquement la réponse.
+- L'ancre est gardée par l'historique de HA (recorder) : quelqu'un qui contrôle à la fois la base du Core et
+  celle de HA peut tout réécrire.
+- Le banc mesure le système réel : il consomme de vrais appels IA (compteur Gemini du jour compris) et écrit
+  dans le journal du Guardian et les statistiques des moteurs (volontairement).
+
+### Retour arrière vers 0.22.0
+Aucun changement de schéma : seules une clé `meta` (`banc_compte`) et les tables de la 0.22.0 sont utilisées.
+Revert du commit de la 0.22.1 sur `adria-core` (version 0.22.2 ou réinstallation de 0.22.0), la base reste
+lisible par la 0.22.0 (vérifié : journal chaîné intègre, BRAIN et banc fonctionnels sur la base de la 0.22.1).
 
 ## Nouveau en 0.22.0 — ASCENSION S1 à S4 (additif, tout est éteint ou en lecture seule par défaut)
 
