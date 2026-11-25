@@ -65,7 +65,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.22.1"
+VERSION = "0.22.2"
 
 
 def lire_options() -> dict:
@@ -834,6 +834,12 @@ class Core:
         l'historique de HA, hors de la base du Core). Appelé après chaque mission, chaque banc et à 23h55."""
         await self.publier_capteur(BR.CAPTEUR, self.brain.etat())
 
+    async def contradiction(self, data: dict) -> dict:
+        """v0.22.2 : événement adria_core_contradiction {ids: [..]} -> contradictions marquées « tranchées »."""
+        res = self.brain.trancher(data)
+        await self.publier_brain()
+        return res
+
     async def brain_voix(self, data: dict) -> dict:
         res = await self.brain.repondre(data)
         await self.publier_capteur(BR.CAPTEUR, self.brain.etat())
@@ -901,6 +907,7 @@ class Core:
                                              "adria_core_analyse", "adria_core_veille",
                                              "adria_core_bilan", "adria_core_bilan_envoyer", "adria_core_famille",
                                              "adria_core_monde", "adria_core_brain", "adria_core_banc",
+                                             "adria_core_contradiction",
                                              "call_service",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
@@ -996,6 +1003,9 @@ class Core:
                         elif e["event_type"] == "adria_core_brain":
                             asyncio.create_task(self.repondre_evenement(
                                 "adria_core_brain_resultat", self.brain_voix(e.get("data", {}))))
+                        elif e["event_type"] == "adria_core_contradiction":
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_contradiction_resultat", self.contradiction(e.get("data", {}))))
                         elif e["event_type"] == "adria_core_banc":
                             asyncio.create_task(self.lancer_banc(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":

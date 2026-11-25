@@ -15,6 +15,7 @@ Les réponses de BRAIN ne sont PAS écrites dans la mémoire longue (pas d'auto-
 d'IA ne doit jamais redevenir une « preuve »). Les 20 dernières missions sont gardées dans `meta`.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -34,6 +35,10 @@ LOG = logging.getLogger("adria_core.brain")
 INTERRUPTEUR = "input_boolean.adria_core_brain"
 CAPTEUR = "sensor.adria_core_brain"
 MAX_JOUR = 60
+# v0.22.2 : durée maximale d'une mission (secondes). Au-delà, plus aucun appel IA : réponse rendue avec ce
+# qui a déjà été trouvé. Les deux modes utilisent la chaîne courte du routeur (« interactif »).
+DELAI_TEXTE, DELAI_VOIX = 25.0, 15.0
+MARGE_MIN = 4.0  # pas de nouvel appel IA s'il reste moins que cela
 OBS_MAX = 1500       # caractères par observation envoyée au modèle
 CONTEXTE_MAX = 6500  # caractères d'observations au total
 ADULTES = {"mael", "vanessa"}
@@ -311,6 +316,10 @@ class Brain:
                "enfant": "C est un enfant qui parle : langage simple, rien sur l argent, la securite ni les reglages.",
                "inconnu": "Voix non reconnue : reste general, rien sur la vie du foyer."}[profil]
         tours = 2 if voix else 3
+        # v0.22.2 : à la voix, une preuve fiable déjà en mémoire suffit -> un seul tour (réponse directe)
+        if voix and any(o.get("ref") and o.get("confiance", 0) >= FI.SEUIL_SAIT for o in obs):
+            tours = 1
+        echeance = t0 + (DELAI_VOIX if voix else DELAI_TEXTE)
         finale: dict = {}
         # 3. Boucle : le modèle choisit les outils, le Guardian décide
         for tour in range(tours):
@@ -319,8 +328,17 @@ class Brain:
             prompt = PROMPT.format(maintenant=f"{jj[m.weekday()]} {m.strftime('%d/%m/%Y %H:%M')}", qui=qui,
                                    tours=f"{reste} (DERNIER tour : tu dois repondre)" if reste == 1 else reste,
                                    outils=catalogue, observations=self._rendu(obs), question=q)
-            rep = await self.core.routeur.demander(prompt, "interactif" if voix else "rapide", "adria_core_brain",
-                                                   **({"seulement": seulement} if seulement else {}))
+            restant = echeance - time.monotonic()
+            if restant < MARGE_MIN:
+                res["delai_depasse"] = True
+                break
+            try:
+                rep = await asyncio.wait_for(self.core.routeur.demander(
+                    prompt, "interactif", "adria_core_brain", **({"seulement": seulement} if seulement else {})),
+                    restant)
+            except asyncio.TimeoutError:
+                res["delai_depasse"] = True  # réponse rendue sans nouvel appel IA, avec ce qui est déjà trouvé
+                break
             if not rep.get("ok"):
                 break
             res["moteur"] = rep.get("moteur")
@@ -424,6 +442,18 @@ class Brain:
         return {"etat": v.get("etat"), "motif": v.get("motif"), "garantie_depuis": v.get("garantie_depuis"),
                 "ancrage_en_retard": self.guardian.ancrage_en_retard, "dernier_echec": reg.dernier_echec}
 
+    def trancher(self, data: dict) -> dict:
+        """v0.22.2 : Mael marque des contradictions comme « tranchées » (liste d'ids). Rien n'est supprimé."""
+        ids = data.get("ids") if isinstance(data.get("ids"), list) else [data.get("id")]
+        faits = 0
+        for i in ids:
+            try:
+                faits += bool(self.registre.trancher(int(i)))
+            except (TypeError, ValueError):
+                continue
+        return {"req_id": data.get("req_id", ""), "ok": True, "tranchees": faits,
+                "ouvertes": len(self.registre.ouvertes(1000))}
+
     def etat(self) -> dict:
         g = self.guardian.stats()
         return {"state": (self.dernier or {}).get("statut") or "aucune",
@@ -432,4 +462,9 @@ class Brain:
                                "guardian": g, "journal_integre": self.guardian.verifier_chaine()["ok"],
                                "journal_ancre": self.guardian.ancre(),
                                "ancrage": self._ancrage(),
-                               "contradictions_ouvertes": len(self.registre.ouvertes(100))}}
+                               "contradictions_ouvertes": len(self.registre.ouvertes(1000)),
+                               # v0.22.2 : les 20 plus récentes, à trancher par Mael (textes abrégés)
+                               "contradictions": [
+                                   {"id": c["id"], "quand": c["quand"][:16], "motif": c["motif"],
+                                    "a": c["texte_a"][:120], "b": c["texte_b"][:120]}
+                                   for c in self.registre.ouvertes(20)]}}
