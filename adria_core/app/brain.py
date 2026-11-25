@@ -66,6 +66,10 @@ CONFIANCE_OUTIL = {"etat_core": 0.95, "etat_entite": 0.9, "historique_entite": 0
 COMMANDE = re.compile(r"^\s*(peux tu |tu peux |pourrais tu )?(desarm|arme|coupe|eteins|eteindre|allume|ouvre|ferme|"
                       r"deverrouill|verrouill|desactiv|active|arrete|stoppe|lance|demarre|supprim|efface|change|"
                       r"modifie|mets|met )")
+# v0.22.4 : questions sur l'état technique du Core -> etat_core consulté d'office (sans IA), avant le modèle
+TECHNIQUE = re.compile(r"\b(version|adria core|le core|ton core|erreurs? ouvertes?|journal des erreurs|moteurs?( d)? ia|"
+                       r"routeur|recherche par le sens|indexation|ta memoire|tes moteurs|ton etat|tu vas bien)\b")
+SANS_ARGUMENT = ("etat_core", "carnet_dernier", "habitudes", "vue_foyer")  # même résultat à chaque appel
 NE_SAIS_PAS = ("Je n'ai trouvé aucune trace fiable de cela dans ma mémoire ni dans la maison. "
                "Je préfère te le dire plutôt que d'inventer.")
 
@@ -299,7 +303,10 @@ class Brain:
         voix = str(data.get("voix")).lower() == "true"
         res = {"req_id": data.get("req_id", ""), "mission": mission, "ok": False, "texte": "", "profil": profil,
                "statut": "ignore", "preuves": [], "outils": [], "contradictions": [], "proposition": None,
-               "moteur": None, "tours": 0}
+               "moteur": None, "tours": 0, "etapes": []}
+
+        def etape(nom: str, debut: float, **k) -> None:  # v0.22.4 : durée de chaque étape (diagnostic)
+            res["etapes"].append({"etape": nom, "s": round(time.monotonic() - debut, 1), **k})
 
         def fin(texte: str, ok: bool = True, **k) -> dict:
             res.update(ok=ok, texte=texte, duree=round(time.monotonic() - t0, 1), **k)
@@ -323,6 +330,7 @@ class Brain:
         obs: list[dict] = []
         numero = {"M": 0, "O": 0}
         # 2. Mémoire d'abord, sans IA
+        t_mem = time.monotonic()
         d = await self.guardian.decider("memoire_chercher", profil, {"question": q}, mission)
         if not d.autorise:
             return fin("Je ne peux pas répondre : " + d.raison + ".", ok=False, refus=d.raison)
@@ -334,6 +342,18 @@ class Brain:
             return fin(f"Je ne peux pas répondre : {e}.", ok=False, refus=str(e))
         except Exception as e:
             LOG.warning("BRAIN mémoire : %s", str(e)[:120])
+        etape("memoire", t_mem, lignes=sum(1 for o in obs if str(o.get("ref") or "").startswith("M")))
+        # v0.22.4 : question technique sur le Core -> état du Core lu d'office (0 IA ; le Guardian décide)
+        if TECHNIQUE.search(CF._plat(q)):
+            t_core = time.monotonic()
+            d = await self.guardian.decider("etat_core", profil, {}, mission)
+            if d.autorise:
+                try:
+                    self._observer(obs, "etat_core", await self.outil("etat_core", {}, profil, q, banc), numero)
+                    res["outils"].append("etat_core")
+                except Exception as e:
+                    LOG.warning("BRAIN etat_core : %s", str(e)[:120])
+            etape("etat_core_d_office", t_core, autorise=d.autorise)
         permis = [n for n in OUTILS if profil in GD.REGISTRE[n]["profils"]]
         catalogue = "\n".join(f"- {n} : {OUTILS[n][0]} args {OUTILS[n][1]}" for n in permis)
         jj = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -356,14 +376,19 @@ class Brain:
             restant = echeance - time.monotonic()
             if restant < MARGE_MIN:
                 res["delai_depasse"] = True
+                etape("ia_non_lancee", time.monotonic(), tour=tour + 1, restant=round(restant, 1))
                 break
+            t_ia = time.monotonic()
             try:
                 rep = await asyncio.wait_for(self.core.routeur.demander(
                     prompt, "interactif", "adria_core_brain", **({"seulement": seulement} if seulement else {})),
                     restant)
             except asyncio.TimeoutError:
                 res["delai_depasse"] = True  # réponse rendue sans nouvel appel IA, avec ce qui est déjà trouvé
+                etape("ia", t_ia, tour=tour + 1, ok=False, raison=f"délai de la mission atteint ({round(restant, 1)} s)")
                 break
+            etape("ia", t_ia, tour=tour + 1, ok=bool(rep.get("ok")), moteur=rep.get("moteur"),
+                  **({} if rep.get("ok") else {"raison": str(rep.get("essais") or "")[:200]}))
             if not rep.get("ok"):
                 break
             res["moteur"] = rep.get("moteur")
@@ -373,13 +398,19 @@ class Brain:
                 if nom not in OUTILS:
                     obs.append({"ref": None, "outil": nom, "texte": "outil inconnu, refusé", "confiance": 0})
                     continue
+                if nom in SANS_ARGUMENT and nom in res["outils"]:  # v0.22.4 : pas de double appel
+                    obs.append({"ref": None, "outil": nom, "texte": "déjà consulté : utilise l'observation existante",
+                                "confiance": 0})
+                    continue
                 d = await self.guardian.decider(nom, profil, args, mission)
                 if not d.autorise:
                     obs.append({"ref": None, "outil": nom, "texte": f"refusé par le Guardian : {d.raison}", "confiance": 0})
                     continue
                 try:
+                    t_out = time.monotonic()
                     self._observer(obs, nom, await self.outil(nom, args, profil, q, banc), numero)
                     res["outils"].append(nom)
+                    etape(f"outil:{nom}", t_out)
                 except Exception as e:
                     obs.append({"ref": None, "outil": nom, "texte": f"erreur : {type(e).__name__}", "confiance": 0})
                 continue
@@ -460,7 +491,11 @@ class Brain:
     def _garder(self, res: dict, q: str, m: datetime) -> None:
         self.dernier = {"quand": m.isoformat(timespec="seconds"), "question": q[:120], "profil": res["profil"],
                         "ok": res["ok"], "statut": res["statut"], "outils": res["outils"], "tours": res["tours"],
-                        "moteur": res["moteur"], "duree": res.get("duree"), "refus": res.get("refus")}
+                        "moteur": res["moteur"], "duree": res.get("duree"), "refus": res.get("refus"),
+                        "delai_depasse": bool(res.get("delai_depasse")), "etapes": res.get("etapes", [])[:12]}
+        LOG.info("BRAIN %s s, %s : %s", res.get("duree"), res["statut"],
+                 " | ".join(f"{e['etape']} {e['s']} s" + (f" ({e.get('moteur') or e.get('raison') or ''})"
+                                                          if e["etape"] == "ia" else "") for e in res.get("etapes", [])))
         h = self._meta("brain_missions", [])
         h.append(self.dernier)
         self.core.memoire.meta("brain_missions", json.dumps(h[-20:], ensure_ascii=False))

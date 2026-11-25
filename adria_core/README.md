@@ -1,4 +1,4 @@
-# ADRIA Core (v0.22.3)
+# ADRIA Core (v0.22.4)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
@@ -6,6 +6,16 @@ Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par
 routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
 échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
 et bus MCP en lecture seule.
+
+## Nouveau en 0.22.4 — diagnostic des missions BRAIN
+
+- **Durée de chaque étape** d'une mission (mémoire, état du Core, chaque appel IA avec son moteur ou la raison
+  de l'échec, chaque outil) dans `derniere_mission.etapes` de `sensor.adria_core_brain` et dans le journal
+  de l'appli (« BRAIN … s : memoire … | ia … »). (Mesure du 25/11 à 19h59 : 35 s sans réponse d'IA, cause
+  non établie.)
+- **Question technique sur le Core** (version, erreurs ouvertes, moteurs IA, routeur, recherche par le sens…) :
+  `etat_core` est lu d'office avant l'IA (0 appel IA ; le Guardian décide, adultes seulement) ; la réponse de
+  secours a donc toujours de quoi répondre.
 
 ## Nouveau en 0.22.3 — réponse de secours complète, contradictions sans faux positifs
 
