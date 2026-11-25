@@ -1,4 +1,4 @@
-# ADRIA Core (v0.22.1)
+# ADRIA Core (v0.22.2)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
@@ -6,6 +6,19 @@ Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par
 routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
 échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
 et bus MCP en lecture seule.
+
+## Nouveau en 0.22.2 — BRAIN plus rapide, contradictions à trancher
+
+- **Délai maximal par mission BRAIN** : 25 s en texte, 15 s à la voix. Les deux modes utilisent la chaîne
+  courte du routeur (« interactif » : Gemini 12 s, Gemini Lite 8 s, Claude 15 s si actif). Plus aucun appel
+  IA quand il reste moins de 4 s ; au-delà du délai, réponse rendue avec ce qui a déjà été trouvé
+  (`delai_depasse: true`). À la voix, si la mémoire contient déjà une preuve fiable, un seul tour.
+  (Mesure du 25/11 en 0.22.1 : 93,6 s pour une question simple, avec la chaîne « rapide ».)
+- **Contradictions** : `sensor.adria_core_brain` publie les 20 plus récentes encore ouvertes (attribut
+  `contradictions` : id, motif, textes abrégés). Mael les tranche avec l'événement
+  `adria_core_contradiction` {ids: [1, 2, …]} → `adria_core_contradiction_resultat`. Rien n'est supprimé.
+- Documentation : le conteneur de l'appli s'appelle `app_0daf054b_adria_core` (et non `addon_…`) ; les
+  commandes `docker exec` le retrouvent maintenant seules.
 
 ## Nouveau en 0.22.1 — correctif de l'audit de la v0.22.0 (sécurité du Guardian et du banc)
 
@@ -69,7 +82,7 @@ un cas E prouvé (marqueur et compteur absents, trace d'usage, journal présent/
 registre `complet` ou `complet_depuis_reference`. Depuis l'appli « Advanced SSH & Web Terminal » :
 
 ```
-docker exec addon_0daf054b_adria_core python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc, ancrage; print(banc.recuperer(Memoire('/data/adria_core.db'), banc.CONFIRMATION, registre=ancrage.Registre()))"
+docker exec "$(docker ps --format '{{.Names}}' | grep -i adria_core | head -1)" python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc, ancrage; print(banc.recuperer(Memoire('/data/adria_core.db'), banc.CONFIRMATION, registre=ancrage.Registre()))"
 ```
 
 **Migration NON VÉRIFIÉE** (décision de Mael du 25/11, option b — base sans ancrage historique, comme la
@@ -80,7 +93,7 @@ une entrée `reference` du registre qui note ce qui a été observé (dernière 
 **La complétude du journal AVANT cette opération n'est pas démontrée** ; la garantie court à partir d'elle.
 
 ```
-docker exec addon_0daf054b_adria_core python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc, ancrage; print(banc.recuperer_non_verifiee(Memoire('/data/adria_core.db'), banc.CONFIRMATION, banc.RECONNAISSANCE, registre=ancrage.Registre()))"
+docker exec "$(docker ps --format '{{.Names}}' | grep -i adria_core | head -1)" python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc, ancrage; print(banc.recuperer_non_verifiee(Memoire('/data/adria_core.db'), banc.CONFIRMATION, banc.RECONNAISSANCE, registre=ancrage.Registre()))"
 ```
 
 Aucune des deux n'est reliée à un événement, un outil MCP, BRAIN ou un agent. Aucun passage n'est accordé le
