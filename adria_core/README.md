@@ -1,4 +1,4 @@
-# ADRIA Core (v0.21.3)
+# ADRIA Core (v0.22.0)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
@@ -6,6 +6,33 @@ Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par
 routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
 échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
 et bus MCP en lecture seule.
+
+## Nouveau en 0.22.0 — ASCENSION S1 à S4 (additif, tout est éteint ou en lecture seule par défaut)
+
+- **S3 — GUARDIAN** (`app/guardian.py`) : autorité indépendante, **sans IA**. Registre fixe des outils
+  (classe + profils) ; refus par défaut ; profil invalide = refus ; les actions réelles ne sont jamais
+  exécutées par BRAIN (OUI de Mael requis) ; **exclusion permanente** : alarme, serrures, sirène, caméras,
+  mandats, interrupteurs `input_boolean.adria_core_*`, désarmement. Arrêt d'urgence :
+  `input_boolean.adria_core_arret_urgence` ON → tout refusé sauf `etat_core`. Panne = refus (tombe fermé).
+  8 outils max par mission. **Journal chaîné par hash** (`guardian_journal`) : toute retouche est détectée.
+- **S2 — BRAIN v1** (`app/brain.py`) : événement `adria_core_brain` {question, qui | profil, voix, req_id}
+  → `adria_core_brain_resultat`. Mémoire d'abord (0 IA), puis 2 à 3 tours où le modèle choisit des outils
+  **en lecture seule** (mémoire, période, procédures, journal des erreurs, état du Core, carnet, habitudes,
+  agenda, vue du foyer, état et historique d'un appareil), chacun validé par le Guardian. Vérification sans
+  IA : preuves citées `[M1]`/`[O1]`, statut `sait` / `suppose` / `ignore`, contradictions. Réponse sourcée ;
+  une action n'est qu'une **proposition**. Personne identifiée → profil `inconnu`. 60 missions/jour.
+  Les réponses de BRAIN ne sont pas écrites dans la mémoire longue (pas d'auto-renforcement).
+  Interrupteur `input_boolean.adria_core_brain` (absent = éteint). Capteur `sensor.adria_core_brain`.
+- **S4 — mémoire fiable** (`app/fiabilite.py`) : nature (observé / déclaré / raconté / déduit) et
+  confiance calculées sans IA pour chaque ligne ; une réponse d'IA (`general`) n'est jamais un fait sûr ;
+  les états volatils vieillissent. Contradictions repérées → table `contradictions` (ajout seul, statut
+  « tranchée » quand Mael décide). La table `lignes` n'est pas modifiée.
+- **S1 — banc d'évaluation** (`app/banc.py`) : 25 scénarios (honnêteté, mémoire, outils, raisonnement,
+  sécurité, profils) notés sans IA. Événement `adria_core_banc` {moteur: "" | gemini | gemini_lite | ollama,
+  categorie} → `sensor.adria_core_banc` (score %, par catégorie, échecs, historique des 10 passages).
+  Le banc ignore l'interrupteur et le quota de BRAIN mais ne fait jamais d'action.
+- Retour arrière : `input_boolean.adria_core_brain` OFF (BRAIN muet) ; ou revenir à v0.21.3.
+  Rien d'existant n'est modifié : routeur, mémoire, MCP, agents et interrupteurs restent identiques.
 
 ## Nouveau en 0.21.3
 
