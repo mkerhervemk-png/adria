@@ -36,7 +36,7 @@ INTERRUPTEUR = "input_boolean.adria_core_brain"
 CAPTEUR = "sensor.adria_core_brain"
 MAX_JOUR = 60
 # v0.22.2 : durée maximale d'une mission (secondes). Au-delà, plus aucun appel IA : réponse rendue avec ce
-# qui a déjà été trouvé. Les deux modes utilisent la chaîne courte du routeur (« interactif »).
+# qui a déjà été trouvé. Les deux modes utilisent la chaîne « brain » du routeur (v0.22.5 : Gemini Lite d'abord).
 DELAI_TEXTE, DELAI_VOIX = 35.0, 15.0  # v0.22.3 : 35 s en texte (Gemini saturé -> Gemini Lite)
 MARGE_MIN = 4.0  # pas de nouvel appel IA s'il reste moins que cela
 OBS_MAX = 1500       # caractères par observation envoyée au modèle
@@ -381,7 +381,7 @@ class Brain:
             t_ia = time.monotonic()
             try:
                 rep = await asyncio.wait_for(self.core.routeur.demander(
-                    prompt, "interactif", "adria_core_brain", **({"seulement": seulement} if seulement else {})),
+                    prompt, "brain", "adria_core_brain", **({"seulement": seulement} if seulement else {})),
                     restant)
             except asyncio.TimeoutError:
                 res["delai_depasse"] = True  # réponse rendue sans nouvel appel IA, avec ce qui est déjà trouvé

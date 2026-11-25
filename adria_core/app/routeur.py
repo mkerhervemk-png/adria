@@ -34,6 +34,9 @@ CHAINES = {
     "rapide": [("gemini", 60), ("pause", 45), ("gemini", 60), ("claude", 60),
                ("gemini_lite", 20), ("ollama", 90)],
     "profond": [("claude", 60), ("gemini", 60), ("gemini_lite", 20), ("ollama", 90)],
+    # v0.22.5 : chaîne propre à BRAIN — Gemini Lite d'abord (≈ 3 s), Gemini en secours (52 erreurs 500 et
+    # 23 dépassements de 12 s en 7 jours au 25/11), puis Claude s'il est actif. La voix ne change pas.
+    "brain": [("gemini_lite", 10), ("gemini", 12), ("claude", 15)],
 }
 CONSIGNE_OLLAMA = {
     "interactif": "\n\n[Mode secours local : reponds directement en francais, phrases courtes, "
@@ -118,8 +121,8 @@ class Surcharge:
 
 
 def ordonner(chaine: list, surcharge: bool, prof: str) -> list:
-    """En surcharge, Gemini Lite passe en tête (sauf mode profond)."""
-    if not surcharge or prof == "profond" or not any(m == "gemini_lite" for m, _ in chaine):
+    """En surcharge, Gemini Lite passe en tête (sauf mode profond ; déjà en tête pour brain)."""
+    if not surcharge or prof in ("profond", "brain") or not any(m == "gemini_lite" for m, _ in chaine):
         return chaine
     lite = [e for e in chaine if e[0] == "gemini_lite"][:1]
     return lite + [e for e in chaine if e[0] != "gemini_lite"]
