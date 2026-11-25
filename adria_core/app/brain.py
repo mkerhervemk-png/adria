@@ -412,6 +412,18 @@ class Brain:
         h.append(self.dernier)
         self.core.memoire.meta("brain_missions", json.dumps(h[-20:], ensure_ascii=False))
 
+    def _ancrage(self) -> dict | None:
+        """Révision 6 : état du registre d'ancrage (lecture seule)."""
+        reg = getattr(self.guardian, "registre", None)
+        if reg is None:
+            return None
+        try:
+            v = reg.verifier(self.core.memoire.db)
+        except Exception as e:
+            v = {"etat": "inaccessible", "motif": type(e).__name__}
+        return {"etat": v.get("etat"), "motif": v.get("motif"), "garantie_depuis": v.get("garantie_depuis"),
+                "ancrage_en_retard": self.guardian.ancrage_en_retard, "dernier_echec": reg.dernier_echec}
+
     def etat(self) -> dict:
         g = self.guardian.stats()
         return {"state": (self.dernier or {}).get("statut") or "aucune",
@@ -419,4 +431,5 @@ class Brain:
                                "derniere_mission": self.dernier, "missions_jour": self._meta("brain_compte", {}).get("n", 0),
                                "guardian": g, "journal_integre": self.guardian.verifier_chaine()["ok"],
                                "journal_ancre": self.guardian.ancre(),
+                               "ancrage": self._ancrage(),
                                "contradictions_ouvertes": len(self.registre.ouvertes(100))}}

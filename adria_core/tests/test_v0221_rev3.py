@@ -16,7 +16,14 @@ import pytest
 APP = os.path.join(os.path.dirname(__file__), "..", "app")
 sys.path.insert(0, APP)
 
+sys.path.insert(0, os.path.dirname(__file__))
 import banc as BANC  # noqa: E402
+import aide_registre  # noqa: E402  (révision 6 : base simulée « ancrée depuis sa création »)
+
+
+@pytest.fixture(autouse=True)
+def _registre_simule(monkeypatch):
+    monkeypatch.setattr(BANC, "recuperer", aide_registre.recuperer_avec_registre_simule)
 import guardian as GD  # noqa: E402
 from store import Memoire  # noqa: E402
 
@@ -358,6 +365,9 @@ def test_journal_brain_seul_ne_bloque_pas(base):
 
 def test_recuperation_manuelle(base):
     chemin, m = base
+    # révision 5 : un cas E réaliste a un journal (le Core le crée au démarrage, le banc y écrit)
+    asyncio_run = __import__("asyncio").new_event_loop().run_until_complete
+    asyncio_run(GD.Guardian(m, None).decider("memoire_chercher", "adulte"))
     BANC.garder(m, {"quand": "x", "version": "0.22.0", "moteur": "chaîne", "score": 88, "reussis": 22,
                     "total": 25, "par_categorie": {}, "latence_moyenne": 28.0})
     assert BANC.recuperer(m, "oui", J) == (False, "confirmation absente ou incorrecte")

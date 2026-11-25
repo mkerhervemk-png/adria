@@ -211,6 +211,7 @@ def test_lancer_banc_respecte_le_quota(tmp_path, monkeypatch):
     monkeypatch.setattr(BANC, "executer", faux_executer)
     c = faire(tmp_path)
     c.banc_en_cours = False
+    c.registre = None  # révision 6 : le quota ne dépend pas du registre
     publies = []
 
     async def publier(e, etat):

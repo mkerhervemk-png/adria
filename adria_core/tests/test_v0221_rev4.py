@@ -6,6 +6,7 @@ Toutes les vérifications relisent la base par une connexion SQLite neuve.
 import asyncio
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import threading
@@ -15,7 +16,14 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
+sys.path.insert(0, os.path.dirname(__file__))
 import banc as BANC  # noqa: E402
+import aide_registre  # noqa: E402  (révision 6 : base simulée « ancrée depuis sa création »)
+
+
+@pytest.fixture(autouse=True)
+def _registre_simule(monkeypatch):
+    monkeypatch.setattr(BANC, "recuperer", aide_registre.recuperer_avec_registre_simule)
 import guardian as GD  # noqa: E402
 from store import Memoire  # noqa: E402
 
@@ -53,8 +61,15 @@ def base(tmp_path):
     return chemin, Memoire(chemin)
 
 
+FIXTURE_V0220 = os.path.join(os.path.dirname(__file__), "fixtures", "base_v0220.db")
+
+
 def cas_E_historique(chemin, m):
-    BANC.garder(m, HISTO)  # base v0.22.0 déjà passée au banc
+    """Révision 5 : VRAIE base v0.22.0 déjà passée au banc (générée par le code de fb018ff, voir
+    fixtures/generer_base_v0220.py), et non plus un simple `BANC.garder()` sans journal."""
+    m.db.close()
+    shutil.copyfile(FIXTURE_V0220, chemin)
+    m.db = Memoire(chemin).db
 
 
 def cas_E_journal(chemin, m):
@@ -94,15 +109,16 @@ def test_trace_de_la_recuperation_dans_le_journal(base):
 def test_refus_confirmation(base):
     chemin, m = base
     cas_E_historique(chemin, m)
+    avant = etat_persiste(chemin)
     for phrase in ("", "oui", OK.lower(), OK + " ", None):
         assert BANC.recuperer(m, phrase, J) == (False, "confirmation absente ou incorrecte")
-    assert etat_persiste(chemin)[:3] == (None, None, [])
+    assert etat_persiste(chemin) == avant
 
 
 def test_refus_base_vierge(base):
     chemin, m = base
     ok, motif = BANC.recuperer(m, OK, J)
-    assert not ok and "aucune trace d'usage" in motif
+    assert not ok and "journal du Guardian absent" in motif  # révision 5 : le journal est vérifié d'abord
     assert etat_persiste(chemin)[:3] == (None, None, [])
     assert BANC.reserver_detail(m, J) == (True, "passage 1/2 (neuve)")  # la voie normale reste ouverte
 
@@ -129,7 +145,7 @@ def test_refus_cas_B_ancien_compteur(base):
     ecrire(chemin, "banc_compte", '{"date": "2026-11-25", "n": 1}')
     ok, motif = BANC.recuperer(m, OK, J)
     assert not ok and "compteur présent" in motif
-    assert etat_persiste(chemin)[:3] == (None, '{"date": "2026-11-25", "n": 1}', [])
+    assert etat_persiste(chemin)[:3] == (None, '{"date": "2026-11-25", "n": 1}', [])  # aucune ligne « banc »
 
 
 def test_refus_cas_C_marqueur_sans_compteur(base):

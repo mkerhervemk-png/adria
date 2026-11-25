@@ -120,16 +120,31 @@ def empreinte(prec: str, contenu: dict) -> str:
     return hashlib.sha256((prec + json.dumps(contenu, ensure_ascii=False, sort_keys=True)).encode()).hexdigest()
 
 
-def ajouter_ligne(db, contenu: dict) -> None:
+def ajouter_ligne(db, contenu: dict) -> tuple[int, str]:
     """Ajoute UNE ligne chaînée au journal, SANS commit : l'appelant décide de la transaction (le banc
-    l'écrit dans la même transaction que sa réservation). Lève une exception en cas d'échec."""
+    l'écrit dans la même transaction que sa réservation). Lève une exception en cas d'échec.
+    Renvoie (id, hash) de la ligne, pour son ancrage après le commit (révision 6)."""
     r = db.execute("SELECT hash FROM guardian_journal ORDER BY id DESC LIMIT 1").fetchone()
     prec = r[0] if r else "0" * 64
-    db.execute(
+    h = empreinte(prec, contenu)
+    cur = db.execute(
         "INSERT INTO guardian_journal (quand, mission, profil, outil, classe, autorise, raison, prec, hash)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (contenu["quand"], contenu["mission"], contenu["profil"], contenu["outil"], contenu["classe"],
-         contenu["autorise"], contenu["raison"], prec, empreinte(prec, contenu)))
+         contenu["autorise"], contenu["raison"], prec, h))
+    return cur.lastrowid, h
+
+
+def ancrer(registre, db, jid: int, jhash: str, origine: str, source: str) -> bool:
+    """Ancre une ligne DÉJÀ COMMITÉE du journal (le verrou du registre doit être tenu). False si l'ancrage
+    échoue : la ligne reste valable dans le journal mais n'est PAS ancrée (état dégradé, détecté ensuite)."""
+    try:
+        n = db.execute("SELECT COUNT(*) FROM guardian_journal WHERE id <= ?", (jid,)).fetchone()[0]
+        registre.ajouter("ligne", jid, jhash, n, origine, source)
+        return True
+    except Exception as e:
+        registre.dernier_echec = f"ancrage de la ligne {jid} impossible ({type(e).__name__})"
+        return False
 
 
 def texte_sensible(texte: str) -> bool:
@@ -139,9 +154,11 @@ def texte_sensible(texte: str) -> bool:
 class Guardian:
     """`memoire` fournit `db` (sqlite3) ; `etat` est une coroutine entity_id -> état (ou None)."""
 
-    def __init__(self, memoire, etat=None):
+    def __init__(self, memoire, etat=None, registre=None):
         self.memoire = memoire
         self.etat = etat
+        self.registre = registre  # révision 6 : registre d'ancrage (None = pas d'ancrage, ex. tests)
+        self.ancrage_en_retard = False
         self.compteurs: dict[str, int] = {}
         self.refus = 0
         self.memoire.db.execute(TABLE_JOURNAL)
@@ -221,19 +238,31 @@ class Guardian:
 
     def noter(self, mission, profil, outil, d: Decision, quand: datetime | None = None) -> bool:
         """Ajoute la décision au journal chaîné. Renvoie False si l'écriture a échoué."""
+        if self.registre is None:
+            return self._noter(mission, profil, outil, d, quand) is not None
+        # verrou du registre AVANT la transaction SQLite et rendu APRÈS l'ancrage (ordre identique partout)
+        with self.registre.verrou() as tenu:
+            ligne = self._noter(mission, profil, outil, d, quand)
+            if ligne is None:
+                return False
+            if not (tenu and ancrer(self.registre, self.memoire.db, ligne[0], ligne[1], "guardian", "guardian.noter")):
+                self.ancrage_en_retard = True  # la décision reste valable ; la ligne n'est PAS ancrée
+            return True
+
+    def _noter(self, mission, profil, outil, d: Decision, quand: datetime | None) -> tuple[int, str] | None:
         try:
             contenu = {"quand": (quand or datetime.now()).isoformat(timespec="seconds"), "mission": str(mission or ""),
                        "profil": str(profil or ""), "outil": str(outil or ""), "classe": d.classe,
                        "autorise": int(d.autorise), "raison": d.raison[:200]}
-            ajouter_ligne(self.memoire.db, contenu)
+            ligne = ajouter_ligne(self.memoire.db, contenu)
             self.memoire.db.commit()
-            return True
+            return ligne
         except Exception:
             try:  # ne jamais laisser une transaction ouverte derrière un échec
                 self.memoire.db.rollback()
             except Exception:
                 pass
-            return False  # l'appelant transforme une autorisation non tracée en refus
+            return None  # l'appelant transforme une autorisation non tracée en refus
 
     def verifier_chaine(self) -> dict:
         """{'ok': bool, 'lignes': n, 'rupture': id|None} — une ligne retouchée casse la chaîne."""

@@ -46,26 +46,56 @@ Guardian (témoin indépendant).
 **Une base v0.22.0 qui a déjà fait tourner le banc est dans le cas E** (elle a `banc_historique` mais ni
 compteur ni marqueur) : après l'installation de la 0.22.1, le banc reste refusé jusqu'à la récupération.
 
-**Récupération manuelle** (intervention explicite de Mael, jamais faite par le Core) : depuis l'appli HA
-« Advanced SSH & Web Terminal » (mode protection désactivé), avec ADRIA Core démarré :
+### Registre d'ancrage du journal du Guardian (révision 6)
+`/media/adria_core_ancres/guardian.jsonl` (`app/ancrage.py`) : une ligne JSON par écriture du journal, ajoutée
+juste après son commit (verrou `fcntl` commun pris avant la transaction, `fsync`). Chaque entrée : `seq`
+(1, 2, 3…), `type` (`ligne` | `reference`), `jid` + `jhash` (ligne du journal ancrée), `n` (lignes du journal),
+`quand`, `origine`, `source`, `prec` + `h` (chaîne propre du registre).
+- **Rôle** : prouver, à partir d'une date connue, qu'aucune ligne du journal n'a disparu (troncature,
+  restauration d'une ancienne sauvegarde de l'appli, perte). **Pas** une protection contre une compromission
+  du conteneur ou de HA : le même conteneur écrit la base et le registre.
+- **Support** : `/media` est un autre dossier que `/data` mais, sous Home Assistant OS, sur le **même disque
+  physique** (partition de données). Une sauvegarde **partielle** de l'appli ne contient que `/data` ; une
+  sauvegarde **complète** contient aussi le dossier `media`. Le Core écrit déjà dans `/media` en production
+  (classement A3, formulaires). Une sonde au démarrage vérifie l'accès au dossier (journal de l'appli).
+- **Panne du registre** : la décision du Guardian reste valable (journalisée), BRAIN continue ; la ligne
+  n'est pas ancrée (`ancrage_en_retard`, attribut `ancrage` de `sensor.adria_core_brain`) et seule la
+  récupération du banc devient impossible. Le registre n'est jamais réparé ni reconstruit.
+- **États** : `complet`, `complet_depuis_reference` (preuve) ; `absent`, `vide`, `partiel`, `en_retard`,
+  `lacune` (absence de preuve) ; `corrompu`, `tronque`, `divergent`, `inaccessible` (incohérence).
+
+**Récupération manuelle VÉRIFIÉE** (intervention explicite de Mael, jamais faite par le Core) : seulement sur
+un cas E prouvé (marqueur et compteur absents, trace d'usage, journal présent/non vide/intègre) **et** un
+registre `complet` ou `complet_depuis_reference`. Depuis l'appli « Advanced SSH & Web Terminal » :
 
 ```
-docker exec addon_0daf054b_adria_core python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc; print(banc.recuperer(Memoire('/data/adria_core.db'), 'RECUPERATION MANUELLE DU QUOTA DU BANC'))"
+docker exec addon_0daf054b_adria_core python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc, ancrage; print(banc.recuperer(Memoire('/data/adria_core.db'), banc.CONFIRMATION, registre=ancrage.Registre()))"
 ```
 
-Elle n'agit **que sur un cas E prouvé** (révision 4) : marqueur et compteur tous deux absents, au moins
-une trace d'usage du banc, et journal du Guardian intègre. Sinon elle refuse sans rien écrire : base vierge,
-base saine, cas B, C ou D, double récupération, journal rompu (la chaîne n'est ni réparée ni masquée).
-Elle écrit alors par simple ajout (jamais d'écrasement), dans une seule transaction : un compteur « quota
-du jour épuisé », un marqueur `recuperation` et une ligne `banc_recuperation` au journal. **Aucun passage
-n'est accordé le jour même**, le banc revient le lendemain.
+**Migration NON VÉRIFIÉE** (décision de Mael du 25/11, option b — base sans ancrage historique, comme la
+production v0.22.0) : deux phrases exactes, mêmes contrôles du cas E, registre en « absence de preuve »
+uniquement (jamais sur une incohérence prouvée), une seule fois (une 2e exige `NOUVELLE_AUTORISATION`).
+Écrit le marqueur `recuperation_non_verifiee`, un compteur « quota du jour épuisé », une ligne au journal, puis
+une entrée `reference` du registre qui note ce qui a été observé (dernière ligne, hash, nombre de lignes).
+**La complétude du journal AVANT cette opération n'est pas démontrée** ; la garantie court à partir d'elle.
+
+```
+docker exec addon_0daf054b_adria_core python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc, ancrage; print(banc.recuperer_non_verifiee(Memoire('/data/adria_core.db'), banc.CONFIRMATION, banc.RECONNAISSANCE, registre=ancrage.Registre()))"
+```
+
+Aucune des deux n'est reliée à un événement, un outil MCP, BRAIN ou un agent. Aucun passage n'est accordé le
+jour même ; le banc revient le lendemain.
 
 ### Limites connues (v0.22.1)
 - Protection contre la perte ou la corruption ACCIDENTELLE du quota : quelqu'un qui peut écrire dans la base
   du Core peut aussi y écrire un compteur valide ; le journal chaîné et son ancre dans HA permettent de le
   constater après coup.
-- Retour arrière : la 0.22.0 ignore le compteur ; les bancs lancés en 0.22.0 ne sont pas comptés.
-- Une base dont le journal du Guardian est rompu ne peut pas récupérer le quota du banc : le banc y reste
+- Retour arrière : la 0.22.0 ignore le compteur et n'ancre pas ; les bancs lancés en 0.22.0 ne sont pas
+  comptés, et ses lignes de journal laissent une `lacune` au retour en 0.22.1 (seule la récupération est
+  alors impossible sans nouvelle migration non vérifiée explicitement autorisée).
+- Registre : même disque physique que la base sous HAOS ; une restauration COMPLÈTE de HA ramène base et
+  registre au même instant (cohérents entre eux, donc non détectée : c'est un retour arrière voulu).
+- Une base dont le journal du Guardian est rompu, absent ou vide ne peut pas récupérer le quota du banc : le banc y reste
   refusé tant que la rupture n'a pas été examinée à la main (aucune procédure automatique prévue).
 - Le Guardian est un module du même processus que le Core : il protège contre une mauvaise sortie d'un
   modèle (qui ne peut pas exécuter de code), pas contre un Core compromis.
