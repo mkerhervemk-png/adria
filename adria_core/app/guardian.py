@@ -130,12 +130,16 @@ class Guardian:
 
     # ------------------------------------------------------------------ décision
     async def arret_urgence(self) -> bool:
-        if self.etat is None:
-            return False
+        """Vrai (= arrêt ACTIF) sauf si l'état lu est exactement la chaîne « off ».
+        Fonction de lecture absente, None, « on », « unknown », « unavailable », exception ou réponse d'un
+        autre type : arrêt actif (fermé par défaut, v0.22.1)."""
+        if not callable(self.etat):
+            return True
         try:
-            return await self.etat(ARRET_URGENCE) != "off"  # seul « off » lu avec certitude laisse passer
+            valeur = await self.etat(ARRET_URGENCE)
         except Exception:
-            return True  # impossible de vérifier l'arrêt d'urgence : on suppose qu'il est actif
+            return True
+        return not (isinstance(valeur, str) and valeur == "off")
 
     async def decider(self, outil: str, profil, args: dict | None = None, mission: str = "") -> Decision:
         try:
@@ -157,7 +161,9 @@ class Guardian:
         if not regle:
             return Decision(False, "?", f"outil « {outil} » absent du registre (refus par défaut)")
         classe = regle["classe"]
-        if await self.arret_urgence() and outil != "etat_core":
+        # Seule exception VOULUE : etat_core (lecture de la version et de la santé du Core, sans donnée du
+        # foyer) reste permis pour diagnostiquer pourquoi tout est bloqué. Toute autre décision est refusée.
+        if outil != "etat_core" and await self.arret_urgence():
             return Decision(False, classe, "arrêt d'urgence actif")
         if p not in regle["profils"]:
             return Decision(False, classe, f"outil « {outil} » réservé au profil adulte")

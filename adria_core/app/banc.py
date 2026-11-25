@@ -19,7 +19,7 @@ commandes de sécurité, preuves citées, temps de réponse.
 
 import json
 import time
-from datetime import datetime
+from datetime import date, datetime
 
 import confidentialite as CF
 import guardian as GD
@@ -167,20 +167,61 @@ async def executer(brain, politique, version: str, moteur: str = "", categorie: 
             "echecs": [d for d in details if not d["ok"]], "details": details}
 
 
-def reserver(memoire, maintenant: datetime | None = None, max_jour: int | None = None) -> bool:
-    """Réserve un passage du jour. False si le plafond est atteint (rien n'est lancé)."""
-    jour = (maintenant or datetime.now()).date().isoformat()
-    try:
-        c = json.loads(memoire.meta("banc_compte") or "{}")
-    except ValueError:
-        c = {}
-    if c.get("date") != jour:
-        c = {"date": jour, "n": 0}
-    if c["n"] >= (MAX_JOUR if max_jour is None else max_jour):
+def _compteur_valide(c) -> bool:
+    if not isinstance(c, dict) or set(c) != {"date", "n"}:
         return False
-    c["n"] += 1
-    memoire.meta("banc_compte", json.dumps(c))
-    return True
+    if not isinstance(c["n"], int) or isinstance(c["n"], bool) or c["n"] < 0:
+        return False
+    try:
+        return isinstance(c["date"], str) and date.fromisoformat(c["date"]).isoformat() == c["date"]
+    except ValueError:
+        return False
+
+
+def reserver(memoire, maintenant: datetime | None = None, max_jour: int | None = None) -> bool:
+    """Réserve un passage du jour (v0.22.1, FERMÉ PAR DÉFAUT). Renvoie False — rien n'est lancé — si :
+    le plafond du jour est atteint ; le compteur est illisible, corrompu, négatif ou d'un type inattendu ;
+    sa date est dans le futur ; une lecture ou une écriture SQLite échoue ; une transaction est déjà ouverte.
+    Le compteur ne repart à zéro que si sa date (valide) est strictement antérieure à aujourd'hui.
+    Lecture et écriture dans UNE transaction BEGIN IMMEDIATE : deux réservations simultanées (même depuis
+    deux connexions) ne peuvent pas dépasser le plafond."""
+    limite = MAX_JOUR if max_jour is None else max_jour
+    jour = (maintenant or datetime.now()).date()
+    db = memoire.db
+    try:
+        if db.in_transaction:
+            return False
+        db.execute("BEGIN IMMEDIATE")
+    except Exception:
+        return False
+    try:
+        r = db.execute("SELECT valeur FROM meta WHERE cle = 'banc_compte'").fetchone()
+        if r is None:
+            n = 0  # tout premier passage : aucun compteur n'a encore existé
+        else:
+            c = json.loads(r[0])
+            if not _compteur_valide(c):
+                raise ValueError("compteur du banc invalide")
+            d = date.fromisoformat(c["date"])
+            if d == jour:
+                n = c["n"]
+            elif d < jour:
+                n = 0  # changement de date établi
+            else:
+                raise ValueError("date du compteur dans le futur")
+        if n >= limite:
+            db.rollback()
+            return False
+        db.execute("INSERT OR REPLACE INTO meta (cle, valeur) VALUES ('banc_compte', ?)",
+                   (json.dumps({"date": jour.isoformat(), "n": n + 1}),))
+        db.commit()
+        return True
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False
 
 
 def garder(memoire, res: dict) -> list[dict]:

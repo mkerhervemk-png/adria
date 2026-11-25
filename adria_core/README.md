@@ -10,7 +10,8 @@ et bus MCP en lecture seule.
 ## Nouveau en 0.22.1 — correctif de l'audit de la v0.22.0 (sécurité du Guardian et du banc)
 
 - **Arrêt d'urgence fermé par défaut** : `input_boolean.adria_core_arret_urgence` bloque tout (sauf
-  `etat_core`) dès que son état n'est pas exactement `off` (inconnu, indisponible, absent, illisible).
+  `etat_core`) dès que son état n'est pas exactement la chaîne `off` : fonction de lecture absente, `None`,
+  `on`, `unknown`, `unavailable`, exception ou réponse d'un autre type = arrêt actif (révision 2).
 - **Journal obligatoire** : une décision qui n'a pas pu être écrite dans `guardian_journal` devient un refus.
 - **Filtre central des entités sensibles** (`guardian.entite_autorisee`) appliqué à toutes les classes
   (lecture comprise) et à tous les chemins (entity_id exact, recherche par nom, historique) : alarme,
@@ -19,7 +20,10 @@ et bus MCP en lecture seule.
 - **Profils** : le profil vient de `qui` ; un `profil` fourni ne peut que restreindre (le plus strict gagne).
 - **Preuves** : une preuve citée qui ne partage aucun terme significatif avec la réponse est écartée
   (`preuves_ecartees`) ; sans preuve pertinente, la réponse est au mieux « je n'en suis pas sûre ».
-- **Banc** : 2 passages par jour au plus (compteur dans la base, réservé avant le passage) ; plus aucune
+- **Banc** : 2 passages par jour au plus (compteur dans la base, réservé avant le passage, dans une
+  transaction `BEGIN IMMEDIATE` : pas de dépassement en cas d'appels simultanés). **Fermé par défaut**
+  (révision 2) : compteur illisible, corrompu, négatif, d'un type inattendu, daté dans le futur, ou erreur
+  SQLite = refus ; remise à zéro seulement si la date enregistrée (valide) est antérieure à aujourd'hui. Plus aucune
   écriture dans le journal des erreurs, le registre des contradictions ni l'historique des missions.
 - **Ancre du journal** : la tête de la chaîne (`journal_ancre`) est publiée dans `sensor.adria_core_brain`
   après chaque mission, chaque banc et à 23h55 ; une chaîne entièrement recalculée ne correspond plus aux
@@ -34,6 +38,8 @@ et bus MCP en lecture seule.
   prouve pas qu'une preuve implique logiquement la réponse.
 - L'ancre est gardée par l'historique de HA (recorder) : quelqu'un qui contrôle à la fois la base du Core et
   celle de HA peut tout réécrire.
+- Un compteur du banc corrompu bloque le banc jusqu'à sa correction manuelle (clé `meta.banc_compte`) :
+  c'est voulu (fermé par défaut), il n'existe pas de remise à zéro automatique.
 - Le banc mesure le système réel : il consomme de vrais appels IA (compteur Gemini du jour compris) et écrit
   dans le journal du Guardian et les statistiques des moteurs (volontairement).
 
