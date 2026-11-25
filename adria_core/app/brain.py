@@ -37,7 +37,7 @@ CAPTEUR = "sensor.adria_core_brain"
 MAX_JOUR = 60
 # v0.22.2 : durée maximale d'une mission (secondes). Au-delà, plus aucun appel IA : réponse rendue avec ce
 # qui a déjà été trouvé. Les deux modes utilisent la chaîne courte du routeur (« interactif »).
-DELAI_TEXTE, DELAI_VOIX = 25.0, 15.0
+DELAI_TEXTE, DELAI_VOIX = 35.0, 15.0  # v0.22.3 : 35 s en texte (Gemini saturé -> Gemini Lite)
 MARGE_MIN = 4.0  # pas de nouvel appel IA s'il reste moins que cela
 OBS_MAX = 1500       # caractères par observation envoyée au modèle
 CONTEXTE_MAX = 6500  # caractères d'observations au total
@@ -121,6 +121,30 @@ def pertinentes(texte: str, preuves: list[dict]) -> list[dict]:
 def est_commande_sensible(question: str) -> bool:
     plat = CF._plat(question).strip()
     return bool(COMMANDE.search(plat)) and GD.texte_sensible(question)
+
+
+def resume_outil(o: dict) -> str:
+    """v0.22.3 : phrase lisible, SANS IA, à partir du résultat brut d'un outil (réponse de secours)."""
+    nom, brut = o.get("outil"), o.get("brut")
+    try:
+        if nom == "etat_core" and isinstance(brut, dict):
+            t = (f"ADRIA Core {brut.get('version')}, {brut.get('lignes')} lignes en mémoire, "
+                 f"{brut.get('erreurs_ouvertes', 0)} erreur(s) ouverte(s)")
+            return t + (f", maintenance : {brut['maintenance']}" if brut.get("maintenance") else "")
+        if nom == "etat_entite" and isinstance(brut, list):
+            return " ; ".join(f"{e.get('nom') or e.get('entity_id')} : {e.get('etat')}" for e in brut[:4])
+        if nom == "agenda" and isinstance(brut, list):
+            return "agenda : " + " ; ".join(str(x) for x in brut[:3])
+        if nom == "vue_foyer" and isinstance(brut, dict):
+            return str(brut.get("foyer") or "")[:200]
+        if nom == "evolution_journal" and isinstance(brut, list):
+            return f"{len(brut)} entrée(s) au journal des erreurs" + (
+                f", dont : {str(brut[0].get('erreur') or brut[0])[:120]}" if brut and isinstance(brut[0], dict) else "")
+        if nom == "historique_entite" and isinstance(brut, list):
+            return "historique : " + " ; ".join(str(x) for x in brut[-3:])
+    except Exception:
+        pass
+    return re.sub(r"[{}\[\]\"]", "", str(o.get("texte") or ""))[:160]
 
 
 def _court(obj, n: int = OBS_MAX) -> str:
@@ -246,7 +270,8 @@ class Brain:
         vide = resultat in (None, "", [], {})
         obs.append({"ref": f"O{numero['O']}", "outil": nom, "date": date.today().isoformat(),
                     "source": nom, "texte": _court(resultat if not vide else "rien"),
-                    "confiance": 0 if vide else CONFIANCE_OUTIL.get(nom, 0.7), "nature": FI.OBSERVE})
+                    "confiance": 0 if vide else CONFIANCE_OUTIL.get(nom, 0.7), "nature": FI.OBSERVE,
+                    "brut": None if vide else resultat})  # v0.22.3 : pour la réponse de secours (jamais au modèle)
 
     @staticmethod
     def _rendu(obs: list[dict]) -> str:
@@ -383,8 +408,18 @@ class Brain:
             k["preuves_ecartees"] = [o["ref"] for o in citees if o not in preuves]
         texte = str(j.get("reponse") or "").strip()
         general = j.get("type") == "general"
-        if not texte:  # pas de réponse du modèle : repli honnête, 0 IA
-            if memoire and st != "ignore":
+        if not texte:  # pas de réponse du modèle (IA en panne ou délai dépassé) : repli honnête, 0 IA
+            # v0.22.3 : ce que les OUTILS fiables ont vérifié passe d'abord, puis la mémoire
+            outils = [o for o in obs if str(o.get("ref") or "").startswith("O") and o.get("confiance", 0) >= FI.SEUIL_SAIT]
+            if outils:
+                texte = "Voici ce que j'ai vérifié : " + " ; ".join(resume_outil(o) for o in outils[:2]) + "."
+                preuves = outils[:2]
+                if memoire and st != "ignore":
+                    lignes = sorted(memoire, key=lambda o: -o["confiance"])[:2]
+                    texte += " En mémoire : " + " ; ".join(o["texte"][:120] for o in lignes)
+                    preuves += lignes
+                k["statut"] = FI.statut(preuves)
+            elif memoire and st != "ignore":
                 lignes = sorted(memoire, key=lambda o: -o["confiance"])[:3]
                 texte = "Voici ce que j'ai trouvé : " + " ; ".join(
                     f"{o['date'] + ' : ' if o['date'] else ''}{o['texte'][:160]}" for o in lignes)
