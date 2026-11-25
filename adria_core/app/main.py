@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+import ancrage as AN
 import banc as BANC
 import brain as BR
 import budget as B
@@ -64,7 +65,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.22.0"
+VERSION = "0.22.1"
 
 
 def lire_options() -> dict:
@@ -157,7 +158,8 @@ class Core:
         self.bilan = AgentBilan(  # lot AA1 (24/11)
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
         # ASCENSION (v0.22.0) : Guardian indépendant (S3), BRAIN v1 (S2), banc d'évaluation (S1)
-        self.guardian = Guardian(self.memoire, self.etat)
+        self.registre = AN.Registre()  # révision 6 : /media/adria_core_ancres/guardian.jsonl
+        self.guardian = Guardian(self.memoire, self.etat, self.registre)
         self.brain = BR.Brain(self, self.guardian)
         self.banc_en_cours = False
         self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
@@ -682,7 +684,7 @@ class Core:
             LOG.warning("Etat non publié : %s", e)
 
     async def chercher_tout(self, question: str, n: int = 5, exclure: list[str] | None = None,
-                            profil: str = CF.ADULTE) -> list[dict]:
+                            profil: str = CF.ADULTE, journaliser: bool = True) -> list[dict]:
         """Lot S1 : mots d'abord (P1) ; le sens complète s'il manque des réponses (interrupteur ON).
         v0.21.2 (R1) : la politique du profil s'ajoute TOUJOURS aux exclusions du client, et filtre
         encore le résultat (deuxième barrière). Profil invalide -> CF.AccesRefuse."""
@@ -693,11 +695,13 @@ class Core:
             return lignes
         try:
             sens = self.politique.filtrer(profil, await self.sens.chercher(question, n, exclure, delai=8))
-            self.evolution.corriger("sens_recherche", "la recherche par le sens répond de nouveau")
+            if journaliser:
+                self.evolution.corriger("sens_recherche", "la recherche par le sens répond de nouveau")
         except Exception as e:
             LOG.warning("Recherche par le sens : %s", str(e)[:150])
-            self.evolution.signaler("sens_recherche", "mémoire",
-                                    f"Recherche par le sens indisponible ({type(e).__name__})")
+            if journaliser:  # v0.22.1 : le banc d'évaluation n'écrit pas dans le journal des erreurs
+                self.evolution.signaler("sens_recherche", "mémoire",
+                                        f"Recherche par le sens indisponible ({type(e).__name__})")
             return lignes
         return fusionner(lignes, sens, n)
 
@@ -825,6 +829,11 @@ class Core:
         LOG.info("Capteurs du Core republiés après reconnexion")
 
     # --- ASCENSION (v0.22.0) -----------------------------------------------------------
+    async def publier_brain(self) -> None:
+        """v0.22.1 : republie sensor.adria_core_brain, dont l'ancre du journal du Guardian (gardée par
+        l'historique de HA, hors de la base du Core). Appelé après chaque mission, chaque banc et à 23h55."""
+        await self.publier_capteur(BR.CAPTEUR, self.brain.etat())
+
     async def brain_voix(self, data: dict) -> dict:
         res = await self.brain.repondre(data)
         await self.publier_capteur(BR.CAPTEUR, self.brain.etat())
@@ -834,6 +843,11 @@ class Core:
         """S1 : banc d'évaluation (lecture seule). Un seul passage à la fois."""
         if self.banc_en_cours:
             return
+        ok, motif = BANC.reserver_detail(self.memoire, registre=self.registre)
+        if not ok:
+            LOG.warning("Banc d'évaluation refusé : %s", motif)
+            return
+        LOG.info("Banc d'évaluation : %s", motif)
         self.banc_en_cours = True
         data = data or {}
         try:
@@ -1020,6 +1034,11 @@ class Core:
             except Exception:
                 LOG.exception("Page formulaires")
             self.sens.session = session
+            try:  # révision 6 : sonde du registre d'ancrage (n'écrit aucune entrée)
+                sonde = self.registre.sonde()
+                (LOG.info if sonde["accessible"] else LOG.warning)("Registre d'ancrage : %s", sonde)
+            except Exception:
+                LOG.exception("Registre d'ancrage")
             if self.mcp_jetons:
                 try:
                     self.mcp = ServeurMCP(self, self.mcp_jetons)
@@ -1054,6 +1073,7 @@ class Core:
                                  self.planifier(HEURE_BILAN, self.bilan_dimanche),
                                  self.planifier(HEURE_FAMILLE, self.famille_matin),
                                  self.monde.boucle(),
+                                 self.planifier("23:55", self.publier_brain),
                                  *(self.planifier(h, self.analyser) for h in HEURES_ANALYSE))
 
 

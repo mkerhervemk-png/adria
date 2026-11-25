@@ -10,16 +10,24 @@ commandes de sécurité, preuves citées, temps de réponse.
 - Résultat : sensor.adria_core_banc (score global, par catégorie, échecs) + historique des 10 derniers
   passages dans `meta` pour comparer les versions et les moteurs (ex. llama3.2:3b face à Qwen3).
 - Coût : ~25 missions, 1 à 3 appels IA chacune.
+- v0.22.1 : au plus MAX_JOUR passages par jour, compteur gardé dans la base (survit aux redémarrages,
+  compté AVANT le passage) ; un seul passage à la fois. Le banc n'écrit ni dans le journal des erreurs,
+  ni dans le registre des contradictions, ni dans l'historique des missions de BRAIN. Restent écrits,
+  volontairement : le journal du Guardian (toute décision est tracée) et les statistiques des moteurs IA
+  (consommation réelle, y compris le compteur Gemini du jour).
 """
 
 import json
+import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 
+import ancrage as AN
 import confidentialite as CF
 import guardian as GD
 
 CAPTEUR = "sensor.adria_core_banc"
+MAX_JOUR = 2
 
 # Attentes possibles :
 #   ignore         : réponse « je ne sais pas » (statut ignore)
@@ -159,6 +167,373 @@ async def executer(brain, politique, version: str, moteur: str = "", categorie: 
             "latence_moyenne": round(sum(durees) / len(durees), 1) if durees else None,
             "duree_totale": round(time.monotonic() - t0, 1),
             "echecs": [d for d in details if not d["ok"]], "details": details}
+
+
+# ------------------------------------------------------------------ quota (v0.22.1, révision 3)
+# Deux clés de `meta`, écrites ENSEMBLE dans la même transaction que chaque réservation :
+#   banc_initialise = {"v": 1, "cree": "AAAA-MM-JJTHH:MM:SS", "origine": "neuve" | "migration" | "recuperation"}
+#   banc_compte     = {"date": "AAAA-MM-JJ", "n": entier >= 0, "v": 2}
+# + une ligne « banc_reservation » dans le journal chaîné du Guardian (témoin indépendant de l'usage).
+# Ancien format accepté UNE fois, pour migrer : banc_compte = {"date", "n"} sans marqueur (premières v0.22.1).
+COMPTEUR, MARQUEUR = "banc_compte", "banc_initialise"
+ORIGINES = ("neuve", "migration", "recuperation", "recuperation_non_verifiee")
+CONFIRMATION = "RECUPERATION MANUELLE DU QUOTA DU BANC"
+# Révision 6 : migration NON VÉRIFIÉE (bases sans ancrage historique, ex. production v0.22.0)
+RECONNAISSANCE = "JE RECONNAIS QUE LA COMPLETUDE DU JOURNAL AVANT CETTE OPERATION N'EST PAS DEMONTREE"
+NOUVELLE_AUTORISATION = "NOUVELLE MIGRATION NON VERIFIEE AUTORISEE PAR MAEL"
+LOG = logging.getLogger("adria_core.banc")
+
+
+def _date_valide(v) -> date | None:
+    try:
+        return date.fromisoformat(v) if isinstance(v, str) and date.fromisoformat(v).isoformat() == v else None
+    except ValueError:
+        return None
+
+
+def _entier_positif(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def _compteur(c, ancien: bool) -> date | None:
+    """Date du compteur s'il est valide dans le format attendu (ancien = {date, n} ; nouveau = + v: 2)."""
+    cles = {"date", "n"} if ancien else {"date", "n", "v"}
+    if not isinstance(c, dict) or set(c) != cles or not _entier_positif(c["n"]):
+        return None
+    if not ancien and (c["v"] != 2 or isinstance(c["v"], bool)):
+        return None
+    return _date_valide(c["date"])
+
+
+def _marqueur_valide(m) -> bool:
+    if not isinstance(m, dict) or set(m) != {"v", "cree", "origine"} or m["v"] != 1 or isinstance(m["v"], bool):
+        return False
+    if m["origine"] not in ORIGINES or not isinstance(m["cree"], str):
+        return False
+    try:
+        datetime.fromisoformat(m["cree"])
+        return True
+    except ValueError:
+        return False
+
+
+def _lire(db, cle: str):
+    """(présent, valeur JSON). Une valeur illisible lève ValueError (-> refus)."""
+    r = db.execute("SELECT valeur FROM meta WHERE cle = ?", (cle,)).fetchone()
+    if r is None:
+        return False, None
+    try:
+        return True, json.loads(r[0])
+    except (TypeError, ValueError):
+        raise ValueError(f"D : {cle} illisible (JSON invalide)") from None
+
+
+def _preuves_usage(db) -> list[str]:
+    """Traces d'un usage passé du banc, indépendantes du compteur et du marqueur. Un journal du Guardian
+    dont la chaîne est rompue compte comme une trace (on ne peut plus prouver que la base est vierge)."""
+    preuves = []
+    if db.execute("SELECT 1 FROM meta WHERE cle = 'banc_historique'").fetchone():
+        preuves.append("historique du banc (v0.22.0+)")
+    table = db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'guardian_journal'").fetchone()
+    if table:
+        if db.execute("SELECT 1 FROM guardian_journal WHERE outil IN ('banc_reservation', 'banc_recuperation')"
+                      " LIMIT 1").fetchone():
+            preuves.append("réservations du banc dans le journal du Guardian")
+        prec = "0" * 64
+        for r in db.execute("SELECT quand, mission, profil, outil, classe, autorise, raison, prec, hash"
+                            " FROM guardian_journal ORDER BY id"):
+            contenu = {"quand": r[0], "mission": r[1], "profil": r[2], "outil": r[3], "classe": r[4],
+                       "autorise": r[5], "raison": r[6]}
+            if r[7] != prec or r[8] != GD.empreinte(prec, contenu):
+                preuves.append("journal du Guardian rompu")
+                break
+            prec = r[8]
+    return preuves
+
+
+def _etat_journal(db) -> str:
+    """« absent » (pas de table), « vide », « integre » ou « rompu ». Une erreur SQL se propage (-> refus).
+    Ne crée RIEN : la lecture seule ne doit jamais faire apparaître un journal manquant."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'guardian_journal'").fetchone():
+        return "absent"
+    prec, n = "0" * 64, 0
+    for r in db.execute("SELECT quand, mission, profil, outil, classe, autorise, raison, prec, hash"
+                        " FROM guardian_journal ORDER BY id"):
+        contenu = {"quand": r[0], "mission": r[1], "profil": r[2], "outil": r[3], "classe": r[4],
+                   "autorise": r[5], "raison": r[6]}
+        if r[7] != prec or r[8] != GD.empreinte(prec, contenu):
+            return "rompu"
+        prec, n = r[8], n + 1
+    return "integre" if n else "vide"
+
+
+def _ecrire(db, jour: date, n: int, marqueur: dict | None, quand: datetime, outil: str,
+            raison: str) -> tuple[int, str]:
+    db.execute(GD.TABLE_JOURNAL)
+    db.execute("INSERT OR REPLACE INTO meta (cle, valeur) VALUES (?, ?)",
+               (COMPTEUR, json.dumps({"date": jour.isoformat(), "n": n, "v": 2})))
+    if marqueur is not None:
+        db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (MARQUEUR, json.dumps(marqueur)))
+    return GD.ajouter_ligne(db, {"quand": quand.isoformat(timespec="seconds"), "mission": "banc", "profil": "",
+                                 "outil": outil, "classe": "banc", "autorise": 1, "raison": raison[:200]})
+
+
+def reserver_detail(memoire, maintenant: datetime | None = None, max_jour: int | None = None,
+                    registre: "AN.Registre | None" = None) -> tuple[bool, str]:
+    """Révision 6 : si `registre` est fourni, son verrou est pris AVANT la transaction et la ligne
+    `banc_reservation` est ancrée APRÈS le commit. Un échec d'ancrage n'annule pas la réservation (déjà
+    validée et journalisée) : il laisse un état dégradé qui interdit seulement la récupération. La décision
+    elle-même (cas A à E, quota) est exactement celle de `_reserver()`."""
+    if registre is None:
+        return _reserver(memoire, maintenant, max_jour)[:2]
+    with registre.verrou() as tenu:
+        ok, motif, ligne = _reserver(memoire, maintenant, max_jour)
+        if ok and not (tenu and GD.ancrer(registre, memoire.db, ligne[0], ligne[1], "banc", "banc.reserver")):
+            LOG.warning("Banc : réservation accordée mais NON ancrée (%s)", registre.dernier_echec)
+        return ok, motif
+
+
+def _reserver(memoire, maintenant: datetime | None = None, max_jour: int | None = None):
+    """Réserve un passage du banc. FERMÉ PAR DÉFAUT. Renvoie (accordé, motif).
+
+    A. base vierge (ni compteur, ni marqueur, aucune trace d'usage) : marqueur + compteur créés ensemble ;
+    B. ancien compteur {date, n} valide sans marqueur (premières v0.22.1) : migration SANS remise à zéro ;
+    C. marqueur sans compteur : refus (pas de recréation) ;
+    D. marqueur ou compteur invalide, ou incohérents entre eux (ex. compteur v2 sans marqueur = marqueur
+       supprimé) : refus, aucune réparation ;
+    E. ni compteur ni marqueur mais une trace d'usage (historique du banc, journal) : refus ; seule
+       `recuperer()` (intervention manuelle explicite) débloque.
+    Puis : date du compteur = aujourd'hui -> n ; antérieure (valide) -> 0 ; future -> refus ; n >= plafond ->
+    refus. Tout (compteur, marqueur, ligne du journal) est écrit dans UNE transaction BEGIN IMMEDIATE :
+    une interruption n'en laisse rien. Toute erreur SQLite ou transaction déjà ouverte -> refus."""
+    limite = MAX_JOUR if max_jour is None else max_jour
+    quand = maintenant or datetime.now()
+    jour = quand.date()
+    db = memoire.db
+    try:
+        if db.in_transaction:
+            return False, "transaction déjà ouverte", None
+        db.execute("BEGIN IMMEDIATE")
+    except Exception as e:
+        return False, f"verrou impossible ({type(e).__name__})", None
+    try:
+        a_marqueur, marqueur = _lire(db, MARQUEUR)
+        a_compteur, compteur = _lire(db, COMPTEUR)
+        nouveau_marqueur = None
+        if a_marqueur:
+            if not _marqueur_valide(marqueur):
+                raise ValueError("D : marqueur d'initialisation invalide")
+            if not a_compteur:
+                raise ValueError("C : marqueur présent mais compteur absent")
+            d = _compteur(compteur, ancien=False)
+            if d is None:
+                raise ValueError("D : compteur invalide ou incohérent avec le marqueur")
+        elif a_compteur:
+            if _compteur(compteur, ancien=False) is not None:
+                raise ValueError("D : compteur initialisé mais marqueur absent (supprimé ?)")
+            d = _compteur(compteur, ancien=True)
+            if d is None:
+                raise ValueError("D : compteur invalide")
+            nouveau_marqueur = {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "migration"}
+        else:
+            preuves = _preuves_usage(db)
+            if preuves:
+                raise ValueError("E : compteur et marqueur absents alors que la base a déjà servi ("
+                                 + ", ".join(preuves) + ") ; récupération manuelle requise")
+            d = jour
+            compteur = {"n": 0}
+            nouveau_marqueur = {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "neuve"}
+        if d > jour:
+            raise ValueError("date du compteur dans le futur")
+        n = compteur["n"] if d == jour else 0
+        if n >= limite:
+            db.rollback()
+            return False, f"quota atteint ({n}/{limite} aujourd'hui)", None
+        ligne = _ecrire(db, jour, n + 1, nouveau_marqueur, quand, "banc_reservation",
+                        f"passage {n + 1}/{limite} du {jour.isoformat()}"
+                        + (f" ({nouveau_marqueur['origine']})" if nouveau_marqueur else ""))
+        db.commit()
+        return (True, f"passage {n + 1}/{limite}" + (f" ({nouveau_marqueur['origine']})" if nouveau_marqueur else ""),
+                ligne)
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        motif = str(e) if isinstance(e, ValueError) else f"erreur SQLite ({type(e).__name__})"
+        LOG.warning("Banc refusé : %s", motif)
+        return False, motif, None
+
+
+def reserver(memoire, maintenant: datetime | None = None, max_jour: int | None = None,
+             registre: "AN.Registre | None" = None) -> bool:
+    return reserver_detail(memoire, maintenant, max_jour, registre)[0]
+
+
+def _controles_cas_E(db) -> list[str]:
+    """Contrôles communs aux deux récupérations (dans la transaction). Renvoie les preuves d'usage."""
+    a_marqueur = db.execute("SELECT 1 FROM meta WHERE cle = ?", (MARQUEUR,)).fetchone() is not None
+    a_compteur = db.execute("SELECT 1 FROM meta WHERE cle = ?", (COMPTEUR,)).fetchone() is not None
+    if a_marqueur or a_compteur:
+        raise ValueError("récupération refusée : la base n'est pas dans le cas E ("
+                         + ("marqueur" if a_marqueur else "") + (" et " if a_marqueur and a_compteur else "")
+                         + ("compteur" if a_compteur else "") + " présent ; rien n'est écrasé)")
+    journal = _etat_journal(db)
+    if journal == "absent":
+        raise ValueError("récupération refusée : journal du Guardian absent alors qu'il existe depuis le "
+                         "démarrage de toute v0.22.0+ ; il n'est pas recréé (anomalie à examiner)")
+    if journal == "vide":
+        raise ValueError("récupération refusée : journal du Guardian vide alors que tout passage du banc y "
+                         "écrit ; anomalie à examiner")
+    if journal == "rompu":
+        raise ValueError("récupération refusée : journal du Guardian rompu ; la chaîne doit d'abord être "
+                         "examinée (elle n'est ni réparée ni masquée)")
+    preuves = _preuves_usage(db)
+    if not preuves:
+        raise ValueError("récupération refusée : aucune trace d'usage du banc (base vierge : la première "
+                         "réservation l'initialise normalement)")
+    return preuves
+
+
+def _refus(db, e: Exception, quoi: str) -> tuple[bool, str]:
+    try:
+        db.rollback()
+    except Exception:
+        pass
+    motif = str(e) if isinstance(e, ValueError) else f"erreur SQLite ({type(e).__name__})"
+    LOG.warning("%s refusée : %s", quoi, motif)
+    return False, motif
+
+
+def recuperer(memoire, confirmation: str, maintenant: datetime | None = None,
+              registre: "AN.Registre | None" = None) -> tuple[bool, str]:
+    """RÉCUPÉRATION MANUELLE VÉRIFIÉE du cas E (jamais appelée par le Core ; procédure dans le README).
+
+    Acceptée SEULEMENT si, verrou du registre tenu puis dans une même transaction BEGIN IMMEDIATE :
+      - la phrase de confirmation est exacte ;
+      - le marqueur ET le compteur sont tous deux absents (refus sur base saine, cas B, C ou D) ;
+      - la table `guardian_journal` EXISTE, n'est PAS VIDE et sa chaîne est INTÈGRE (révision 5). Condition
+        historique démontrée : depuis la v0.22.0, le Core crée le journal à son démarrage, avant tout banc, et
+        chaque mission du banc y écrit ; absent ou vide = anomalie. Le journal n'est jamais créé ici ;
+      - une trace d'usage passé du banc existe (refus sur base vierge) ;
+      - (révision 6) le REGISTRE D'ANCRAGE prouve la complétude du journal : chaque ligne depuis la première
+        (ou depuis une référence non vérifiée explicite) est ancrée, sans trou, et la dernière ancre est la
+        dernière ligne du journal. Registre absent, vide, illisible, corrompu, en retard, partiel, ou journal
+        plus court que l'ancrage (troncature, restauration ancienne) -> refus. Aucune preuve n'est fabriquée.
+    Écrit alors (INSERT simple) marqueur `recuperation` + compteur « quota du jour épuisé » + ligne
+    `banc_recuperation`, puis ancre cette ligne. Toute erreur avant le commit -> rollback complet."""
+    if confirmation != CONFIRMATION:
+        return False, "confirmation absente ou incorrecte"
+    if registre is None:
+        return False, "récupération refusée : registre d'ancrage non fourni (complétude non démontrable)"
+    quand = maintenant or datetime.now()
+    db = memoire.db
+    with registre.verrou() as tenu:
+        if not tenu:
+            return False, f"récupération refusée : registre d'ancrage inaccessible ({registre.dernier_echec})"
+        try:
+            if db.in_transaction:
+                return False, "transaction déjà ouverte"
+            db.execute("BEGIN IMMEDIATE")
+        except Exception as e:
+            return False, f"verrou impossible ({type(e).__name__})"
+        try:
+            preuves = _controles_cas_E(db)
+            v = registre.verifier(db)
+            if v["etat"] not in AN.VERIFIES:
+                suite = (" ; seule la migration NON vérifiée, explicitement autorisée, est possible"
+                         if v["etat"] in AN.SANS_PREUVE else " ; incohérence à examiner, rien n'est réparé")
+                raise ValueError(f"récupération refusée : complétude du journal non démontrée ({v['etat']} : "
+                                 f"{v['motif']}){suite}")
+            db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (MARQUEUR, json.dumps(
+                {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "recuperation"})))
+            db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (COMPTEUR, json.dumps(
+                {"date": quand.date().isoformat(), "n": MAX_JOUR, "v": 2})))
+            ligne = GD.ajouter_ligne(db, {
+                "quand": quand.isoformat(timespec="seconds"), "mission": "banc", "profil": "",
+                "outil": "banc_recuperation", "classe": "banc", "autorise": 1,
+                "raison": (f"récupération manuelle vérifiée (cas E : {', '.join(preuves)} ; ancrage {v['etat']} "
+                           f"depuis {v.get('garantie_depuis')}) ; banc bloqué jusqu'au lendemain du "
+                           f"{quand.date().isoformat()}")[:200]})
+            db.commit()
+        except Exception as e:
+            return _refus(db, e, "Récupération du banc")
+        if not GD.ancrer(registre, db, ligne[0], ligne[1], "banc", "banc.recuperer"):
+            return True, ("quota récupéré : prochain passage possible demain ; ATTENTION : la ligne de "
+                          f"récupération n'a pas pu être ancrée ({registre.dernier_echec})")
+        return True, "quota récupéré : prochain passage possible demain"
+
+
+def recuperer_non_verifiee(memoire, confirmation: str, reconnaissance: str, maintenant: datetime | None = None,
+                           registre: "AN.Registre | None" = None, nouvelle_autorisation: str = "") -> tuple[bool, str]:
+    """MIGRATION NON VÉRIFIÉE (révision 6, décision de Mael du 25/11 : option b). Pour une base SANS ancrage
+    historique (production v0.22.0) : la complétude du journal AVANT cette opération N'EST PAS DÉMONTRÉE et
+    ne le sera jamais ; l'opération crée un POINT DE RÉFÉRENCE à partir duquel les écritures sont ancrées.
+
+    Jamais appelée par le Core, un agent ou un modèle (aucun événement, outil MCP ni module n'y mène) ; exige
+    DEUX phrases exactes (CONFIRMATION + RECONNAISSANCE). Mêmes contrôles du cas E que `recuperer()`, puis :
+      - registre lisible et sans incohérence prouvée : seuls les états « absence de preuve » (absent, vide,
+        partiel, en retard) sont acceptés ; complet -> refus (utiliser `recuperer()`) ; corrompu, tronqué,
+        divergent, inaccessible -> refus, rien n'est réparé ;
+      - une seule fois : si une référence existe déjà, refus sauf `nouvelle_autorisation` exacte.
+    Écrit (une transaction) : marqueur `recuperation_non_verifiee`, compteur « quota du jour épuisé », ligne
+    `banc_recuperation_non_verifiee` au journal ; puis ajoute au registre une entrée « reference » qui ancre
+    cette ligne et note ce qui a été OBSERVÉ avant l'opération (dernier id, hash, nombre de lignes)."""
+    if confirmation != CONFIRMATION or reconnaissance != RECONNAISSANCE:
+        return False, "confirmations absentes ou incorrectes (deux phrases exactes requises)"
+    if registre is None:
+        return False, "migration refusée : registre d'ancrage non fourni"
+    quand = maintenant or datetime.now()
+    db = memoire.db
+    with registre.verrou() as tenu:
+        if not tenu:
+            return False, f"migration refusée : registre d'ancrage inaccessible ({registre.dernier_echec})"
+        try:
+            if db.in_transaction:
+                return False, "transaction déjà ouverte"
+            db.execute("BEGIN IMMEDIATE")
+        except Exception as e:
+            return False, f"verrou impossible ({type(e).__name__})"
+        try:
+            preuves = _controles_cas_E(db)
+            v = registre.verifier(db)
+            if v["etat"] in AN.VERIFIES:
+                raise ValueError("migration refusée : la complétude est démontrée, utiliser la récupération normale")
+            if v["etat"] not in AN.SANS_PREUVE:
+                raise ValueError(f"migration refusée : incohérence prouvée du registre ({v['etat']} : {v['motif']}) ; "
+                                 "rien n'est réparé")
+            if v["etat"] != AN.ABSENT and any(e["type"] == "reference" for e in registre.lire()):
+                if nouvelle_autorisation != NOUVELLE_AUTORISATION:
+                    raise ValueError("migration refusée : une référence non vérifiée existe déjà ; une nouvelle "
+                                     "migration exige une nouvelle autorisation explicite de Mael")
+            dernier = db.execute("SELECT id, hash FROM guardian_journal ORDER BY id DESC LIMIT 1").fetchone()
+            n_avant = db.execute("SELECT COUNT(*) FROM guardian_journal").fetchone()[0]
+            observe = {"jid": dernier[0], "jhash": dernier[1], "n": n_avant, "etat_registre": v["etat"],
+                       "quand": quand.isoformat(timespec="seconds")}
+            db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (MARQUEUR, json.dumps(
+                {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "recuperation_non_verifiee"})))
+            db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (COMPTEUR, json.dumps(
+                {"date": quand.date().isoformat(), "n": MAX_JOUR, "v": 2})))
+            ligne = GD.ajouter_ligne(db, {
+                "quand": quand.isoformat(timespec="seconds"), "mission": "banc", "profil": "",
+                "outil": "banc_recuperation_non_verifiee", "classe": "banc", "autorise": 1,
+                "raison": (f"migration NON vérifiée (cas E : {', '.join(preuves)}) ; observé : ligne {dernier[0]}, "
+                           f"{n_avant} lignes ; complétude antérieure NON démontrée")[:200]})
+            n_apres = db.execute("SELECT COUNT(*) FROM guardian_journal").fetchone()[0]
+            db.commit()
+        except Exception as e:
+            return _refus(db, e, "Migration non vérifiée du banc")
+        try:
+            registre.ajouter("reference", ligne[0], ligne[1], n_apres, "recuperation_non_verifiee",
+                             "banc.recuperer_non_verifiee", quand, observe,
+                             "complétude du journal AVANT cette référence NON démontrée ; garantie à partir de "
+                             + quand.isoformat(timespec="seconds"))
+        except Exception as e:
+            registre.dernier_echec = f"référence non écrite ({type(e).__name__})"
+            return True, ("migration non vérifiée écrite dans la base, MAIS la référence n'a pas pu être ajoutée "
+                          f"au registre ({registre.dernier_echec}) : aucune garantie de complétude")
+        return True, ("migration non vérifiée faite : complétude antérieure NON démontrée ; garantie à partir de "
+                      f"{quand.isoformat(timespec='seconds')} ; prochain passage du banc possible demain")
 
 
 def garder(memoire, res: dict) -> list[dict]:

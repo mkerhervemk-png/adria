@@ -1,5 +1,5 @@
 name: ADRIA Core
-version: "0.22.0"
+version: "0.22.1"
 slug: adria_core
 description: Cerveau d'ADRIA hors de HA — mémoire longue, routeur IA, carnet, purges, formulaires PDF, courriers et échéances, classement des papiers, abonnements, garanties, « sors-moi le papier », journal de famille, compétences apprises à la demande, « Mon passé », habitudes repérées, cerveau général, budget du foyer, menus et courses, aide aux devoirs, maintenance de la maison, recherche par le sens, procédures, journal erreur → correction, bus MCP (lecture seule, jetons par profil).
 arch:
