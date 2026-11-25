@@ -107,13 +107,28 @@ def _valeurs(t: str) -> set[str]:
     return {v.replace(" ", "").replace(",", ".") for v in _VALEUR.findall(sans_date)}
 
 
+_HORODATAGE = re.compile(r"\b(\d{1,2}[:h]\d{2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{2}-\d{2})\b")
+
+
+def _horodatages(t: str) -> set[str]:
+    return {m.replace("h", ":") for m in _HORODATAGE.findall(normaliser(t))}
+
+
 def contradictions(lignes: list[dict], seuil: float = 0.5) -> list[dict]:
     """Paires de lignes qui parlent de la même chose (≥ 50 % de mots communs, au moins 3) mais avec des
-    valeurs différentes ou une négation d'un seul côté. Heuristique prudente : signale, ne tranche pas."""
+    valeurs différentes ou une négation d'un seul côté. Heuristique prudente : signale, ne tranche pas.
+    v0.22.3 : deux lignes qui portent des heures ou des dates DIFFÉRENTES décrivent deux moments différents
+    (journal du 01/11 et du 02/11, lumière éteinte à 14:18 puis à 23:50, départs à 08:44 et 10:26) : ce n'est
+    pas une contradiction. Une réponse d'IA (nature « déduit ») n'est jamais comparée."""
     res = []
     for i, a in enumerate(lignes):
         for b in lignes[i + 1:]:
+            if DEDUIT in (a.get("nature"), b.get("nature")):
+                continue
             ta, tb = str(a.get("texte") or ""), str(b.get("texte") or "")
+            ha, hb = _horodatages(ta), _horodatages(tb)
+            if ha and hb and ha != hb:
+                continue
             ca, cb = _contenu(ta), _contenu(tb)
             communs = ca & cb
             if len(communs) < 3 or len(communs) / max(1, min(len(ca), len(cb))) < seuil:

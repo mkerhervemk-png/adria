@@ -1,4 +1,4 @@
-# ADRIA Core (v0.22.2)
+# ADRIA Core (v0.22.3)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
@@ -6,6 +6,17 @@ Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par
 routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
 échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
 et bus MCP en lecture seule.
+
+## Nouveau en 0.22.3 — réponse de secours complète, contradictions sans faux positifs
+
+- **Réponse de secours** (délai dépassé ou IA en panne) : ce que les OUTILS fiables ont vérifié passe en
+  premier, en phrase lisible construite sans IA (ex. `etat_core` → « ADRIA Core 0.22.3, N lignes en mémoire,
+  0 erreur ouverte »), puis la mémoire. « Je ne sais pas » seulement si rien n'a été trouvé. (Mesure du 25/11
+  à 19h44 en 0.22.2 : 25 s mais « je ne sais pas » alors que `etat_core` avait la réponse.)
+- **Délai en texte : 35 s** (voix : 15 s inchangé).
+- **Contradictions** : deux lignes portant des heures ou des dates différentes ne sont plus comparées
+  (moments différents) ; une réponse d'IA n'est jamais comparée. Les 20 contradictions du 25/11 (banc en
+  0.22.0) étaient toutes de ce type.
 
 ## Nouveau en 0.22.2 — BRAIN plus rapide, contradictions à trancher
 
