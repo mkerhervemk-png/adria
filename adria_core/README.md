@@ -53,14 +53,20 @@ compteur ni marqueur) : après l'installation de la 0.22.1, le banc reste refus�
 docker exec addon_0daf054b_adria_core python3 -c "import sys; sys.path.insert(0, '/app'); from store import Memoire; import banc; print(banc.recuperer(Memoire('/data/adria_core.db'), 'RECUPERATION MANUELLE DU QUOTA DU BANC'))"
 ```
 
-Elle écrit un compteur « quota du jour épuisé », un marqueur `recuperation` et une ligne
-`banc_recuperation` au journal : **aucun passage n'est accordé le jour même**, le banc revient le lendemain.
+Elle n'agit **que sur un cas E prouvé** (révision 4) : marqueur et compteur tous deux absents, au moins
+une trace d'usage du banc, et journal du Guardian intègre. Sinon elle refuse sans rien écrire : base vierge,
+base saine, cas B, C ou D, double récupération, journal rompu (la chaîne n'est ni réparée ni masquée).
+Elle écrit alors par simple ajout (jamais d'écrasement), dans une seule transaction : un compteur « quota
+du jour épuisé », un marqueur `recuperation` et une ligne `banc_recuperation` au journal. **Aucun passage
+n'est accordé le jour même**, le banc revient le lendemain.
 
 ### Limites connues (v0.22.1)
 - Protection contre la perte ou la corruption ACCIDENTELLE du quota : quelqu'un qui peut écrire dans la base
   du Core peut aussi y écrire un compteur valide ; le journal chaîné et son ancre dans HA permettent de le
   constater après coup.
 - Retour arrière : la 0.22.0 ignore le compteur ; les bancs lancés en 0.22.0 ne sont pas comptés.
+- Une base dont le journal du Guardian est rompu ne peut pas récupérer le quota du banc : le banc y reste
+  refusé tant que la rupture n'a pas été examinée à la main (aucune procédure automatique prévue).
 - Le Guardian est un module du même processus que le Core : il protège contre une mauvaise sortie d'un
   modèle (qui ne peut pas exécuter de code), pas contre un Core compromis.
 - Le Core ne peut pas authentifier une voix : il fait confiance à `qui` envoyé par HA (bus interne, réservé

@@ -333,9 +333,16 @@ def reserver(memoire, maintenant: datetime | None = None, max_jour: int | None =
 
 
 def recuperer(memoire, confirmation: str, maintenant: datetime | None = None) -> tuple[bool, str]:
-    """RÉCUPÉRATION MANUELLE (jamais appelée par le Core lui-même ; procédure dans le README).
-    Écrit un compteur « quota du jour épuisé » + un marqueur `recuperation` + une ligne du journal : le banc
-    redevient utilisable le LENDEMAIN seulement — la récupération n'accorde jamais de passage le jour même."""
+    """RÉCUPÉRATION MANUELLE du cas E (jamais appelée par le Core lui-même ; procédure dans le README).
+
+    Acceptée SEULEMENT si, dans une même transaction BEGIN IMMEDIATE :
+      - la phrase de confirmation est exacte ;
+      - le marqueur ET le compteur sont tous deux absents (refus sur base saine, cas B, C ou D) ;
+      - une trace d'usage passé du banc existe (refus sur base vierge : elle n'a rien à récupérer) ;
+      - le journal du Guardian est intègre (une chaîne rompue n'est ni « réparée » ni masquée : refus).
+    Écrit alors, par INSERT simple (jamais d'écrasement), un marqueur `recuperation`, un compteur « quota du
+    jour épuisé » et une ligne `banc_recuperation` au journal : aucun passage le jour même, retour le lendemain.
+    Toute erreur -> rollback complet, rien n'est écrit."""
     if confirmation != CONFIRMATION:
         return False, "confirmation absente ou incorrecte"
     quand = maintenant or datetime.now()
@@ -344,10 +351,31 @@ def recuperer(memoire, confirmation: str, maintenant: datetime | None = None) ->
         if db.in_transaction:
             return False, "transaction déjà ouverte"
         db.execute("BEGIN IMMEDIATE")
-        db.execute("INSERT OR REPLACE INTO meta (cle, valeur) VALUES (?, ?)", (MARQUEUR, json.dumps(
+    except Exception as e:
+        return False, f"verrou impossible ({type(e).__name__})"
+    try:
+        a_marqueur = db.execute("SELECT 1 FROM meta WHERE cle = ?", (MARQUEUR,)).fetchone() is not None
+        a_compteur = db.execute("SELECT 1 FROM meta WHERE cle = ?", (COMPTEUR,)).fetchone() is not None
+        if a_marqueur or a_compteur:
+            raise ValueError("récupération refusée : la base n'est pas dans le cas E ("
+                             + ("marqueur" if a_marqueur else "") + (" et " if a_marqueur and a_compteur else "")
+                             + ("compteur" if a_compteur else "") + " présent ; rien n'est écrasé)")
+        preuves = _preuves_usage(db)
+        if "journal du Guardian rompu" in preuves:
+            raise ValueError("récupération refusée : journal du Guardian rompu ; la chaîne doit d'abord être "
+                             "examinée (elle n'est ni réparée ni masquée)")
+        if not preuves:
+            raise ValueError("récupération refusée : aucune trace d'usage du banc (base vierge : la première "
+                             "réservation l'initialise normalement)")
+        db.execute(GD.TABLE_JOURNAL)  # même transaction ; sans effet si la table existe (cas normal)
+        db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (MARQUEUR, json.dumps(
             {"v": 1, "cree": quand.isoformat(timespec="seconds"), "origine": "recuperation"})))
-        _ecrire(db, quand.date(), MAX_JOUR, None, quand, "banc_recuperation",
-                f"récupération manuelle du quota : banc bloqué jusqu'au lendemain du {quand.date().isoformat()}")
+        db.execute("INSERT INTO meta (cle, valeur) VALUES (?, ?)", (COMPTEUR, json.dumps(
+            {"date": quand.date().isoformat(), "n": MAX_JOUR, "v": 2})))
+        GD.ajouter_ligne(db, {"quand": quand.isoformat(timespec="seconds"), "mission": "banc", "profil": "",
+                              "outil": "banc_recuperation", "classe": "banc", "autorise": 1,
+                              "raison": (f"récupération manuelle (cas E : {', '.join(preuves)}) ; banc bloqué "
+                                         f"jusqu'au lendemain du {quand.date().isoformat()}")[:200]})
         db.commit()
         return True, "quota récupéré : prochain passage possible demain"
     except Exception as e:
@@ -355,7 +383,9 @@ def recuperer(memoire, confirmation: str, maintenant: datetime | None = None) ->
             db.rollback()
         except Exception:
             pass
-        return False, f"erreur ({type(e).__name__})"
+        motif = str(e) if isinstance(e, ValueError) else f"erreur SQLite ({type(e).__name__})"
+        LOG.warning("Récupération du banc refusée : %s", motif)
+        return False, motif
 
 
 def garder(memoire, res: dict) -> list[dict]:
