@@ -1,4 +1,4 @@
-# ADRIA Core (v0.22.4)
+# ADRIA Core (v0.22.5)
 
 **Règle permanente : le Core n'efface jamais une ligne** (test automatique : aucun DELETE/DROP/TRUNCATE dans le code).
 
@@ -6,6 +6,12 @@ Cerveau d'ADRIA hors de Home Assistant : mémoire longue (SQLite + recherche par
 routeur IA, carnet de bord, purges des listes HA, consolidation de nuit, formulaires PDF, courriers et
 échéances, papiers, budget, menus, devoirs, maintenance, habitudes, procédures, journal erreur → correction
 et bus MCP en lecture seule.
+
+## Nouveau en 0.22.5 — BRAIN : Gemini Lite d'abord
+
+- Chaîne du routeur propre à BRAIN (`brain`) : Gemini Lite 10 s, puis Gemini 12 s, puis Claude 15 s (s'il
+  est actif). La voix et les autres usages gardent leurs chaînes. (Mesure du 25/11 à 20h36 en 0.22.4 : 16,5 s
+  d'IA, Gemini ayant échoué avant Gemini Lite ; Gemini Lite répond en ≈ 3 s.)
 
 ## Nouveau en 0.22.4 — diagnostic des missions BRAIN
 
