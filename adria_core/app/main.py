@@ -21,12 +21,15 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+import banc as BANC
+import brain as BR
 import budget as B
 from courriers import AgentCourriers
 from devoirs import AgentDevoirs
 from general import AgentGeneral
 from menus import AgentMenus
 from formulaires import AgentFormulaires
+from guardian import Guardian
 from habitudes import AgentHabitudes
 from maintenance import AgentMaintenance
 from analyse import AgentAnalyse, HEURES as HEURES_ANALYSE
@@ -61,7 +64,7 @@ API = "http://supervisor/core/api"
 WS = "ws://supervisor/core/websocket"
 OPTIONS = "/data/options.json"
 BASE = "/data/adria_core.db"
-VERSION = "0.21.3"
+VERSION = "0.22.0"
 
 
 def lire_options() -> dict:
@@ -153,6 +156,10 @@ class Core:
         self.notifs = AgentNotifs(self)  # L3 + L5 (24/11)
         self.bilan = AgentBilan(  # lot AA1 (24/11)
             self, opts.get("formulaire_notifier") or "notify.mobile_app_telephone_mael_sm_s921b")
+        # ASCENSION (v0.22.0) : Guardian indépendant (S3), BRAIN v1 (S2), banc d'évaluation (S1)
+        self.guardian = Guardian(self.memoire, self.etat)
+        self.brain = BR.Brain(self, self.guardian)
+        self.banc_en_cours = False
         self.heure_rappel: str = opts.get("courrier_heure_rappel") or "10:00"
         self.dernier_moteur: str | None = None
         self.derniere_sync: str | None = None
@@ -814,7 +821,35 @@ class Core:
             except Exception as e:
                 LOG.warning("Republication : %s", str(e)[:120])
         await self.publier_capteur(PR.CAPTEUR, self.procedures.etat())
+        await self.publier_capteur(BR.CAPTEUR, self.brain.etat())
         LOG.info("Capteurs du Core republiés après reconnexion")
+
+    # --- ASCENSION (v0.22.0) -----------------------------------------------------------
+    async def brain_voix(self, data: dict) -> dict:
+        res = await self.brain.repondre(data)
+        await self.publier_capteur(BR.CAPTEUR, self.brain.etat())
+        return res
+
+    async def lancer_banc(self, data: dict | None = None) -> None:
+        """S1 : banc d'évaluation (lecture seule). Un seul passage à la fois."""
+        if self.banc_en_cours:
+            return
+        self.banc_en_cours = True
+        data = data or {}
+        try:
+            moteur = str(data.get("moteur") or "")
+            res = await BANC.executer(self.brain, self.politique, VERSION,
+                                      moteur if moteur in ("gemini", "gemini_lite", "claude", "ollama") else "",
+                                      str(data.get("categorie") or ""))
+            historique = BANC.garder(self.memoire, res)
+            LOG.info("Banc d'évaluation : %s %% (%s/%s), moteur %s", res["score"], res["reussis"], res["total"],
+                     res["moteur"])
+            await self.publier_capteur(BANC.CAPTEUR, BANC.capteur(res, historique))
+        except Exception:
+            LOG.exception("Banc d'évaluation")
+        finally:
+            self.banc_en_cours = False
+            await self.publier_capteur(BR.CAPTEUR, self.brain.etat())
 
     def resume_etat(self) -> dict:
         s = self.memoire.stats()
@@ -825,7 +860,8 @@ class Core:
                 "analyse": len((self.analyse.dernier or {}).get("anomalies", [])),
                 "sens": self.sens.indexation or self.sens.stats(), "ia_24h": self.memoire.stats_ia(86400),
                 "erreurs_ouvertes": len(self.evolution.lister("ouverte", 100)),
-                "procedures": len(self.procedures.toutes())}
+                "procedures": len(self.procedures.toutes()),
+                "guardian": self.guardian.stats(), "brain": (self.brain.dernier or {}).get("statut")}
 
     async def ecouter(self) -> None:
         """Ecoute les événements ; se reconnecte seul en cas de coupure."""
@@ -850,7 +886,8 @@ class Core:
                                              "adria_core_procedure", "adria_core_correction", "adria_core_sens",
                                              "adria_core_analyse", "adria_core_veille",
                                              "adria_core_bilan", "adria_core_bilan_envoyer", "adria_core_famille",
-                                             "adria_core_monde", "call_service",
+                                             "adria_core_monde", "adria_core_brain", "adria_core_banc",
+                                             "call_service",
                                              "mobile_app_notification_action"), 1):
                         await ws.send_json({"id": i, "type": "subscribe_events", "event_type": evt})
                     LOG.info("Connecté à Home Assistant")
@@ -942,6 +979,11 @@ class Core:
                                 "adria_core_correction_resultat", self.correction(e.get("data", {}))))
                         elif e["event_type"] == "adria_core_sens":
                             asyncio.create_task(self.indexer_sens(forcer=True))
+                        elif e["event_type"] == "adria_core_brain":
+                            asyncio.create_task(self.repondre_evenement(
+                                "adria_core_brain_resultat", self.brain_voix(e.get("data", {}))))
+                        elif e["event_type"] == "adria_core_banc":
+                            asyncio.create_task(self.lancer_banc(e.get("data", {})))
                         elif e["event_type"] == "adria_core_synchroniser":
                             asyncio.create_task(self.synchroniser())
             except Exception as e:

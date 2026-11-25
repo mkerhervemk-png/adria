@@ -1,0 +1,385 @@
+"""BRAIN v1 — boucle de raisonnement d'ADRIA (ASCENSION S2, v0.22.0).
+
+Au lieu d'envoyer la question à un modèle et de rendre sa réponse, BRAIN :
+  1. vérifie le profil auprès du GUARDIAN (refus par défaut) ;
+  2. refuse tout de suite, sans IA, une commande touchant la sécurité ou les garde-fous ;
+  3. cherche d'abord dans la mémoire (0 IA) ;
+  4. laisse le modèle choisir au plus `tours` outils EN LECTURE SEULE (chaque appel passe par le Guardian) ;
+  5. vérifie la réponse sans IA : preuves existantes, « je sais / je suppose / j'ignore », contradictions ;
+  6. rend une réponse SOURCÉE. Une action n'est jamais exécutée : au mieux une proposition (OUI de Mael).
+
+Déclenchement : événement `adria_core_brain` {question, qui | profil, voix, req_id}
+-> `adria_core_brain_resultat`. Actif si input_boolean.adria_core_brain est ON (absent = éteint).
+Bornes : 3 tours (2 à la voix), 8 outils par mission, observations tronquées, 60 missions par jour.
+Les réponses de BRAIN ne sont PAS écrites dans la mémoire longue (pas d'auto-renforcement : une réponse
+d'IA ne doit jamais redevenir une « preuve »). Les 20 dernières missions sont gardées dans `meta`.
+"""
+
+import json
+import logging
+import re
+import time
+import uuid
+from datetime import date, datetime, timedelta
+from urllib.parse import quote
+
+import confidentialite as CF
+import fiabilite as FI
+import guardian as GD
+from formulaires import lire_json
+from passe import libelle
+
+LOG = logging.getLogger("adria_core.brain")
+
+INTERRUPTEUR = "input_boolean.adria_core_brain"
+CAPTEUR = "sensor.adria_core_brain"
+MAX_JOUR = 60
+OBS_MAX = 1500       # caractères par observation envoyée au modèle
+CONTEXTE_MAX = 6500  # caractères d'observations au total
+ADULTES = {"mael", "vanessa"}
+ENFANTS = {"ryan", "iwan", "aelia"}
+
+OUTILS: dict[str, tuple[str, str]] = {
+    "memoire_chercher": ("Cherche dans la mémoire longue du foyer (mots puis sens).", '{"question": "..."}'),
+    "memoire_periode": ("Ce qui s'est passé entre deux dates.", '{"debut": "AAAA-MM-JJ", "fin": "AAAA-MM-JJ", "mots": ""}'),
+    "procedures_chercher": ("Comment faire une tâche (procédures, compétences apprises).", '{"question": "..."}'),
+    "evolution_journal": ("Erreurs ouvertes d'ADRIA et leçons corrigées.", '{"statut": "ouverte|corrigée"}'),
+    "etat_core": ("État technique d'ADRIA Core (version, mémoire, moteurs IA 24 h).", "{}"),
+    "carnet_dernier": ("Dernier carnet de bord du soir.", "{}"),
+    "habitudes": ("Habitudes repérées et rappels acceptés.", "{}"),
+    "agenda": ("Événements des agendas sur les prochains jours (1 à 14).", '{"jours": 7}'),
+    "vue_foyer": ("Vue actuelle du foyer (qui est où, maison, météo) + anticipations 24 h.", "{}"),
+    "etat_entite": ("État actuel d'un appareil : entity_id exact ou quelques mots du nom.", '{"entite": "..."}'),
+    "historique_entite": ("Changements d'état d'un appareil (entity_id exact) sur N heures (1 à 48).",
+                          '{"entite": "light.salon", "heures": 24}'),
+}
+# Fiabilité d'une observation faite par un outil (les lignes de mémoire ont leur propre note)
+CONFIANCE_OUTIL = {"etat_core": 0.95, "etat_entite": 0.9, "historique_entite": 0.9, "agenda": 0.85,
+                   "vue_foyer": 0.8, "procedures_chercher": 0.85, "evolution_journal": 0.8,
+                   "carnet_dernier": 0.6, "habitudes": 0.6}
+
+COMMANDE = re.compile(r"^\s*(peux tu |tu peux |pourrais tu )?(desarm|arme|coupe|eteins|eteindre|allume|ouvre|ferme|"
+                      r"deverrouill|verrouill|desactiv|active|arrete|stoppe|lance|demarre|supprim|efface|change|"
+                      r"modifie|mets|met )")
+NE_SAIS_PAS = ("Je n'ai trouvé aucune trace fiable de cela dans ma mémoire ni dans la maison. "
+               "Je préfère te le dire plutôt que d'inventer.")
+
+PROMPT = (
+    "Tu es BRAIN, le raisonnement d'ADRIA (maison Kerherve). Nous sommes le {maintenant}. {qui}\n"
+    "Tu dois repondre a la DEMANDE en t appuyant sur des OBSERVATIONS reelles. Tu peux appeler UN outil "
+    "(lecture seule) par tour ; il te reste {tours} tour(s). Outils permis :\n{outils}\n"
+    "Regles : n invente jamais un fait sur la maison ou la famille ; cite les references [M1], [O2]… des "
+    "observations utilisees ; si rien ne repond, dis que tu ne sais pas. Tu n executes jamais d action : "
+    "si une action aiderait, decris-la dans \"proposition\" (Mael devra dire OUI). Question de culture "
+    "generale (rien sur la maison) : type=general, pas de preuve exigee.\n"
+    "Reponds UNIQUEMENT par un JSON, soit {{\"action\": \"outil\", \"outil\": \"nom\", \"args\": {{...}}, "
+    "\"pourquoi\": \"court\"}}, soit {{\"action\": \"repondre\", \"type\": \"maison|general\", "
+    "\"reponse\": \"2 a 5 phrases, tutoiement, sans liste\", \"preuves\": [\"M1\"], \"proposition\": null}}.\n"
+    "OBSERVATIONS :\n{observations}\nDEMANDE : {question}"
+)
+
+
+def profil_de(data: dict) -> str:
+    """Profil de la demande. `profil` explicite et valide sinon déduit de `qui` ; personne -> inconnu."""
+    if data.get("profil") not in (None, ""):
+        return CF.normaliser_profil(data.get("profil")) or CF.INCONNU
+    p = str(data.get("qui") or "").split(" ")[0].lower().replace("ë", "e").replace("é", "e")
+    if p in ADULTES:
+        return CF.ADULTE
+    if p in ENFANTS:
+        return CF.ENFANT
+    return CF.INCONNU
+
+
+def est_commande_sensible(question: str) -> bool:
+    plat = CF._plat(question).strip()
+    return bool(COMMANDE.search(plat)) and GD.texte_sensible(question)
+
+
+def _court(obj, n: int = OBS_MAX) -> str:
+    t = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, default=str)
+    return t if len(t) <= n else t[: n - 1] + "…"
+
+
+class Brain:
+    def __init__(self, core, guardian: GD.Guardian):
+        self.core = core
+        self.guardian = guardian
+        self.registre = FI.Registre(core.memoire)
+        self.dernier: dict | None = None
+        self.missions = 0
+
+    # ------------------------------------------------------------------ compteurs
+    def _meta(self, cle, defaut):
+        try:
+            return json.loads(self.core.memoire.meta(cle) or "null") or defaut
+        except ValueError:
+            return defaut
+
+    def compter(self, m: datetime) -> bool:
+        c = self._meta("brain_compte", {})
+        if c.get("date") != m.date().isoformat():
+            c = {"date": m.date().isoformat(), "n": 0}
+        if c["n"] >= MAX_JOUR:
+            return False
+        c["n"] += 1
+        self.core.memoire.meta("brain_compte", json.dumps(c))
+        return True
+
+    # ------------------------------------------------------------------ outils (lecture seule)
+    async def outil(self, nom: str, args: dict, profil: str, question: str) -> object:
+        c = self.core
+        if nom == "memoire_chercher":
+            q = str(args.get("question") or question)[:300]
+            return await c.chercher_tout(q, 6, profil=profil)
+        if nom == "memoire_periode":
+            from store import mots_cles
+            pol = c.politique
+            lignes = c.memoire.chercher_periode(str(args.get("debut"))[:10], str(args.get("fin"))[:10],
+                                                mots_cles(str(args.get("mots") or "")), 8, pol.exclusions(profil))
+            return pol.filtrer(profil, lignes)
+        if nom == "procedures_chercher":
+            q = str(args.get("question") or "").strip()
+            return c.procedures.chercher(q, 5) if q else c.procedures.toutes()[:10]
+        if nom == "evolution_journal":
+            st = args.get("statut") if args.get("statut") in ("ouverte", "corrigée") else None
+            return c.evolution.lister(st, 8)
+        if nom == "etat_core":
+            return c.resume_etat()
+        if nom == "carnet_dernier":
+            return c.agent_memoire.dernier or "Pas encore de carnet."
+        if nom == "habitudes":
+            return {"reperees": getattr(c.habitudes, "derniers", [])[:8], "rappels": c.habitudes.rappels[:8]}
+        if nom == "agenda":
+            j = max(1, min(int(args.get("jours") or 7), 14))
+            auj = date.today()
+            evts = await c.menus.agenda([auj + timedelta(days=k) for k in range(j)])
+            return [f"{str(e.get('start'))[:16].replace('T', ' ')} {e.get('summary')}" for e in evts[:30]]
+        if nom == "vue_foyer":
+            res = {}
+            for cle, ent in (("foyer", "sensor.adria_core_monde"), ("anticipations", "sensor.adria_core_anticipations")):
+                try:
+                    res[cle] = ((await c.appel("GET", f"/states/{ent}")).get("attributes") or {}).get("texte")
+                except Exception:
+                    res[cle] = None
+            return res
+        if nom == "etat_entite":
+            return await self._etat_entite(str(args.get("entite") or ""))
+        if nom == "historique_entite":
+            return await self._historique(str(args.get("entite") or ""), args.get("heures"))
+        raise KeyError(nom)
+
+    async def _etat_entite(self, entite: str) -> list[dict]:
+        c = self.core
+        if re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entite):
+            e = await c.appel("GET", f"/states/{entite}")
+            return [{"entity_id": entite, "nom": (e.get("attributes") or {}).get("friendly_name"),
+                     "etat": e.get("state"), "depuis": str(e.get("last_changed"))[:16]}]
+        from competences import choisir_entites
+        etats = await c.appel("GET", "/states")
+        par_id = {e["entity_id"]: e for e in etats}
+        res = []
+        for eid, nom in choisir_entites(entite, etats, 5):
+            if eid in par_id and not GD.entite_sensible(eid) and eid.split(".")[0] not in GD.DOMAINES_ILLISIBLES:
+                res.append({"entity_id": eid, "nom": nom, "etat": par_id[eid].get("state"),
+                            "depuis": str(par_id[eid].get("last_changed"))[:16]})
+        return res
+
+    async def _historique(self, entite: str, heures) -> list[str]:
+        if not re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entite):
+            return ["entity_id exact demandé (ex. light.salon)"]
+        h = max(1, min(int(heures or 24), 48))
+        debut = (datetime.now().astimezone() - timedelta(hours=h)).isoformat(timespec="seconds")
+        rep = await self.core.appel(
+            "GET", f"/history/period/{quote(debut)}?filter_entity_id={entite}&minimal_response&no_attributes")
+        etats = rep[0] if rep and isinstance(rep, list) and rep[0] else []
+        return [f"{str(e.get('last_changed'))[5:16].replace('T', ' ')} {e.get('state')}" for e in etats[-30:]]
+
+    # ------------------------------------------------------------------ observations
+    def _observer(self, obs: list[dict], nom: str, resultat, numero: dict) -> None:
+        if nom in ("memoire_chercher", "memoire_periode") and isinstance(resultat, list):
+            lignes = []
+            for l in resultat:
+                numero["M"] += 1
+                lignes.append({**l, "ref": f"M{numero['M']}"})
+            lignes = FI.annoter(lignes)
+            for l in lignes:
+                obs.append({"ref": l["ref"], "outil": nom, "date": l.get("date") or "", "source": l.get("source"),
+                            "texte": str(l.get("texte") or "")[:300], "confiance": l["confiance"],
+                            "nature": l["nature"]})
+            if not lignes:
+                obs.append({"ref": None, "outil": nom, "texte": "aucune ligne trouvée", "confiance": 0})
+            return
+        numero["O"] += 1
+        vide = resultat in (None, "", [], {})
+        obs.append({"ref": f"O{numero['O']}", "outil": nom, "date": date.today().isoformat(),
+                    "source": nom, "texte": _court(resultat if not vide else "rien"),
+                    "confiance": 0 if vide else CONFIANCE_OUTIL.get(nom, 0.7), "nature": FI.OBSERVE})
+
+    @staticmethod
+    def _rendu(obs: list[dict]) -> str:
+        lignes, total = [], 0
+        for o in obs:
+            tete = f"[{o['ref']}] " if o.get("ref") else "[-] "
+            src = f"({o.get('outil')}{', ' + o['date'] if o.get('date') else ''}, fiabilité {o.get('confiance')})"
+            t = f"{tete}{src} {o['texte']}"
+            total += len(t)
+            if total > CONTEXTE_MAX:
+                lignes.append("[…observations tronquées]")
+                break
+            lignes.append(t)
+        return "\n".join(lignes) or "(aucune)"
+
+    # ------------------------------------------------------------------ mission
+    async def repondre(self, data: dict, maintenant: datetime | None = None, banc: bool = False,
+                       seulement: str = "") -> dict:
+        """`banc` (banc d'évaluation, interne) : ignore l'interrupteur et le quota ; `seulement` force un moteur."""
+        t0 = time.monotonic()
+        m = maintenant or datetime.now()
+        mission = uuid.uuid4().hex[:12]
+        q = str(data.get("question") or "").strip()[:600]
+        profil = profil_de(data)
+        voix = str(data.get("voix")).lower() == "true"
+        res = {"req_id": data.get("req_id", ""), "mission": mission, "ok": False, "texte": "", "profil": profil,
+               "statut": "ignore", "preuves": [], "outils": [], "contradictions": [], "proposition": None,
+               "moteur": None, "tours": 0}
+
+        def fin(texte: str, ok: bool = True, **k) -> dict:
+            res.update(ok=ok, texte=texte, duree=round(time.monotonic() - t0, 1), **k)
+            self.guardian.fin_mission(mission)
+            self._garder(res, q, m)
+            return res
+
+        if not banc and await self.core.etat(INTERRUPTEUR) != "on":
+            return fin("Mon raisonnement avancé est éteint pour le moment.", ok=False, refus="interrupteur")
+        if not q:
+            return fin("Je n'ai pas compris la question.", ok=False)
+        # 1. Commande touchant la sécurité ou les garde-fous : refus sans IA
+        if est_commande_sensible(q):
+            d = await self.guardian.decider("proposer_action", profil, {"texte": q}, mission)
+            return fin("Je ne peux pas faire ça : " + d.raison + ". Les actions de sécurité restent entre tes mains.",
+                       ok=False, refus=d.raison)
+        if not banc and not self.compter(m):
+            return fin("J'ai atteint ma limite de raisonnements pour aujourd'hui.", ok=False, refus="quota")
+        self.missions += 1
+        obs: list[dict] = []
+        numero = {"M": 0, "O": 0}
+        # 2. Mémoire d'abord, sans IA
+        d = await self.guardian.decider("memoire_chercher", profil, {"question": q}, mission)
+        if not d.autorise:
+            return fin("Je ne peux pas répondre : " + d.raison + ".", ok=False, refus=d.raison)
+        try:
+            self._observer(obs, "memoire_chercher", await self.outil("memoire_chercher", {"question": q}, profil, q), numero)
+            res["outils"].append("memoire_chercher")
+        except CF.AccesRefuse as e:
+            return fin(f"Je ne peux pas répondre : {e}.", ok=False, refus=str(e))
+        except Exception as e:
+            LOG.warning("BRAIN mémoire : %s", str(e)[:120])
+        permis = [n for n in OUTILS if profil in GD.REGISTRE[n]["profils"]]
+        catalogue = "\n".join(f"- {n} : {OUTILS[n][0]} args {OUTILS[n][1]}" for n in permis)
+        jj = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+        qui = {"adulte": f"C est {str(data.get('qui') or 'un adulte').split(' ')[0].capitalize()} (adulte) qui parle.",
+               "enfant": "C est un enfant qui parle : langage simple, rien sur l argent, la securite ni les reglages.",
+               "inconnu": "Voix non reconnue : reste general, rien sur la vie du foyer."}[profil]
+        tours = 2 if voix else 3
+        finale: dict = {}
+        # 3. Boucle : le modèle choisit les outils, le Guardian décide
+        for tour in range(tours):
+            res["tours"] = tour + 1
+            reste = tours - tour
+            prompt = PROMPT.format(maintenant=f"{jj[m.weekday()]} {m.strftime('%d/%m/%Y %H:%M')}", qui=qui,
+                                   tours=f"{reste} (DERNIER tour : tu dois repondre)" if reste == 1 else reste,
+                                   outils=catalogue, observations=self._rendu(obs), question=q)
+            rep = await self.core.routeur.demander(prompt, "interactif" if voix else "rapide", "adria_core_brain",
+                                                   **({"seulement": seulement} if seulement else {}))
+            if not rep.get("ok"):
+                break
+            res["moteur"] = rep.get("moteur")
+            j = lire_json(rep.get("data") or "")
+            if j.get("action") == "outil" and tour < tours - 1:
+                nom, args = str(j.get("outil") or ""), j.get("args") if isinstance(j.get("args"), dict) else {}
+                if nom not in OUTILS:
+                    obs.append({"ref": None, "outil": nom, "texte": "outil inconnu, refusé", "confiance": 0})
+                    continue
+                d = await self.guardian.decider(nom, profil, args, mission)
+                if not d.autorise:
+                    obs.append({"ref": None, "outil": nom, "texte": f"refusé par le Guardian : {d.raison}", "confiance": 0})
+                    continue
+                try:
+                    self._observer(obs, nom, await self.outil(nom, args, profil, q), numero)
+                    res["outils"].append(nom)
+                except Exception as e:
+                    obs.append({"ref": None, "outil": nom, "texte": f"erreur : {type(e).__name__}", "confiance": 0})
+                continue
+            if j.get("action") == "repondre" or j.get("reponse"):
+                finale = j
+                break
+            if j.get("action") == "outil":  # dernier tour : on force une réponse au tour suivant -> pas de tour
+                break
+        return fin(**await self._verifier(finale, obs, profil, mission))
+
+    # ------------------------------------------------------------------ vérification (sans IA)
+    async def _verifier(self, j: dict, obs: list[dict], profil: str, mission: str) -> dict:
+        refs = {o["ref"]: o for o in obs if o.get("ref")}
+        preuves = [refs[r] for r in (j.get("preuves") or []) if isinstance(r, str) and r in refs]
+        memoire = [o for o in obs if o.get("ref", "") and o["ref"].startswith("M")]
+        utiles = preuves or [o for o in obs if o.get("ref") and o.get("confiance", 0) > 0]
+        st = FI.statut(utiles)
+        k: dict = {"statut": st}
+        cont = FI.contradictions([{**o, "texte": o["texte"]} for o in memoire])
+        if cont:
+            self.registre.noter(cont)
+            k["contradictions"] = cont[:3]
+        texte = str(j.get("reponse") or "").strip()
+        general = j.get("type") == "general"
+        if not texte:  # pas de réponse du modèle : repli honnête, 0 IA
+            if memoire and st != "ignore":
+                lignes = sorted(memoire, key=lambda o: -o["confiance"])[:3]
+                texte = "Voici ce que j'ai trouvé : " + " ; ".join(
+                    f"{o['date'] + ' : ' if o['date'] else ''}{o['texte'][:160]}" for o in lignes)
+                preuves = lignes
+            else:
+                texte, k["statut"] = NE_SAIS_PAS, "ignore"
+        elif not general:
+            # réponse « maison » : jugée sur ses preuves citées (à défaut, sur ce qui a été observé)
+            st = FI.statut(preuves or utiles)
+            k["statut"] = st
+            if st == "ignore":
+                texte = NE_SAIS_PAS  # aucune preuve : on ne laisse pas passer
+            elif st == "suppose":
+                texte = "Je n'en suis pas sûre : " + texte[0].lower() + texte[1:]
+        if general and not preuves:
+            k["statut"] = "general"
+        if cont:
+            texte += " Attention : deux souvenirs se contredisent, j'ai retenu le plus récent."
+        prop = j.get("proposition")
+        if prop and isinstance(prop, (str, dict)):
+            t = prop if isinstance(prop, str) else json.dumps(prop, ensure_ascii=False)
+            d = await self.guardian.decider("proposer_action", profil, {"texte": t}, mission)
+            if d.autorise:
+                k["proposition"] = t[:300]
+                texte += " Je te propose : " + t[:200] + " (rien n'est fait sans ton OUI)."
+            else:
+                k["proposition_refusee"] = d.raison
+        k["preuves"] = [{"ref": o["ref"], "date": o.get("date") or "", "source": o.get("source"),
+                         "origine": libelle(str(o.get("source") or "")),
+                         "extrait": o["texte"][:160], "confiance": o.get("confiance"), "nature": o.get("nature")}
+                        for o in preuves[:6]]
+        return {"texte": texte[:900], **k}
+
+    # ------------------------------------------------------------------ suivi
+    def _garder(self, res: dict, q: str, m: datetime) -> None:
+        self.dernier = {"quand": m.isoformat(timespec="seconds"), "question": q[:120], "profil": res["profil"],
+                        "ok": res["ok"], "statut": res["statut"], "outils": res["outils"], "tours": res["tours"],
+                        "moteur": res["moteur"], "duree": res.get("duree"), "refus": res.get("refus")}
+        h = self._meta("brain_missions", [])
+        h.append(self.dernier)
+        self.core.memoire.meta("brain_missions", json.dumps(h[-20:], ensure_ascii=False))
+
+    def etat(self) -> dict:
+        g = self.guardian.stats()
+        return {"state": (self.dernier or {}).get("statut") or "aucune",
+                "attributes": {"friendly_name": "ADRIA Core — BRAIN", "icon": "mdi:brain",
+                               "derniere_mission": self.dernier, "missions_jour": self._meta("brain_compte", {}).get("n", 0),
+                               "guardian": g, "journal_integre": self.guardian.verifier_chaine()["ok"],
+                               "contradictions_ouvertes": len(self.registre.ouvertes(100))}}
