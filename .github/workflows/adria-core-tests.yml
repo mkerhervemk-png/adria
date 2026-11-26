@@ -2,8 +2,11 @@ name: ADRIA Core — tests
 
 # Validation seulement (fiche R7) : aucune publication, aucun secret, lecture seule du dépôt.
 on:
+  # G0.1 : contrôle OBLIGATOIRE à la fusion -> produit pour TOUTE PR vers adria-core, quels que soient les
+  # fichiers touchés (un filtre `paths` laisserait le contrôle requis « en attente » et bloquerait la PR).
+  # `garde/essai-*` = voie d'essai de la règle (validation et revalidation), sans toucher adria-core.
   pull_request:
-    paths: ['adria_core/**', '.github/workflows/adria-core-tests.yml']
+    branches: [adria-core, 'garde/essai-*']
   push:
     branches: [adria-core]
     paths: ['adria_core/**', '.github/workflows/adria-core-tests.yml']
@@ -18,6 +21,8 @@ concurrency:
 
 jobs:
   tests:
+    # Nom du contrôle exigé par la règle G0.1 : ne JAMAIS le changer sans suivre la procédure G0.1 §7.
+    name: adria-core-tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -52,11 +57,18 @@ jobs:
       # Alpine, mêmes poppler/pypdf/reportlab qu'en production), pas sur l'Ubuntu du runner.
       - name: Image de l'appli (Dockerfile)
         run: docker build -t adria-core-test .
-      - name: Tests de sécurité (P1, bloquants)
+      # G0.1 : Guardian, BRAIN et registre d'ancrage rejoignent l'étape de sécurité. Un fichier absent fait
+      # échouer pytest (code 4) : la liste ne peut pas maigrir en silence.
+      - name: Tests de sécurité (P1, bloquants) — confidentialité, purge, Guardian, BRAIN, ancrage
         run: >-
           docker run --rm -v "$PWD":/src -w /src adria-core-test sh -c
           "apk add --no-cache py3-pytest py3-pytest-cov >/dev/null &&
-          python3 -m pytest -q -p no:cacheprovider tests/test_securite_v0212.py tests/test_purge_garde.py tests/test_consolidation.py"
+          python3 -m pytest -q -p no:cacheprovider
+          tests/test_securite_v0212.py tests/test_purge_garde.py tests/test_consolidation.py
+          tests/test_ascension.py
+          tests/test_v0221.py tests/test_v0221_rev2.py tests/test_v0221_rev3.py
+          tests/test_v0221_rev4.py tests/test_v0221_rev5.py tests/test_v0221_rev6.py
+          tests/test_v0222.py tests/test_v0223.py tests/test_v0224.py tests/test_v0225.py"
       - name: Tous les tests + couverture
         run: >-
           docker run --rm -v "$PWD":/src -w /src adria-core-test sh -c
