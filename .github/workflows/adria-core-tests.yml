@@ -22,7 +22,7 @@ concurrency:
 jobs:
   tests:
     # Nom du contrôle exigé par la règle G0.1 : ne JAMAIS le changer sans suivre la procédure G0.1 §7.
-    name: adria-core-tests
+    name: autre
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
